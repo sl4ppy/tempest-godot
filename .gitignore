@@ -1,0 +1,18 @@
+# Godot 4+ specific ignores
+.godot/
+*.translation
+
+# Godot exported builds
+export/
+*.exe
+*.pck
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+*.code-workspace
+.idea/
