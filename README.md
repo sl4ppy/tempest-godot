@@ -1,0 +1,94 @@
+# Tempest (Godot 4)
+
+Faithful recreation of Atari's 1981 **Tempest** arcade game in Godot 4 / GDScript.
+
+This is a **behavioral recreation** — we implement the original game logic directly from comprehensive reverse-engineered documentation, not a hardware emulator. Same data + same algorithms = identical gameplay.
+
+![Godot 4.6](https://img.shields.io/badge/Godot-4.6-blue) ![GDScript](https://img.shields.io/badge/language-GDScript-green) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
+
+## Features
+
+- **All 16 well shapes** with accurate 3D-to-2D perspective projection (WORSCR)
+- **CAM bytecode VM** — enemy AI runs as a bytecode interpreter executing the original 20 opcodes across 11 scripts, not reimplemented as imperative code
+- **Five enemy types**: Flipper, Pulsar, Tanker, Spiker, Fuseball — each with accurate movement, spawning, and attack behaviors
+- **Two rendering systems** matching the original hardware:
+  - **ONELIN** (Flipper, Pulsar) — shapes drawn parametrically between lane edge endpoints
+  - **SCAPIC** (Tanker, Spiker, Fuseball, shots) — centered vector shapes with perspective scaling
+- **Perspective-correct depth** via inverse-depth mapping (`1/y` projection)
+- **Complete collision system** — lane-based Y-depth proximity (ENSIZE, CHACHA)
+- **Superzapper** with color cycling and sequential enemy kills
+- **Spike system** — Spikers leave spikes, player shots destroy them (LIFECT)
+- **99-wave difficulty progression** from original lookup tables
+- **CRT phosphor glow** shader (bloom + persistence) on SubViewport
+- **Mouse spinner input** — captured mouse for analog arcade spinner feel
+
+## Running
+
+1. Open `project.godot` in **Godot 4.4+**
+2. Press **F5**
+
+### Controls
+
+| Input | Action |
+|-------|--------|
+| Mouse movement | Rotate player around well rim |
+| Left click / Space | Fire |
+| Right click / Tab | Superzapper |
+| Arrow Left/Right | Rotate (keyboard alternative) |
+| Escape | Toggle mouse capture |
+
+## Architecture
+
+```
+scripts/
+  game_manager.gd        # 19-state machine (mirrors ALEXEC.MAC)
+  well_renderer.gd       # 3D→2D projection + well/spike drawing
+  cam_interpreter.gd     # CAM bytecode VM (20 opcodes, 11 scripts)
+  vector_shapes.gd       # ONELIN + SCAPIC shape data and renderers
+  level_data.gd          # All 99 waves of difficulty tables
+  colors.gd              # 16-color palette autoload
+  hud.gd                 # Score, lives, wave display
+  entities/
+    player.gd            # Cursor movement, rim positioning
+    invader_manager.gd   # 6-slot enemy pool, nymph spawning, rendering
+    projectile.gd        # 8-slot player shot pool + spike collision
+    enemy_shots.gd       # 4-slot enemy shot pool
+scenes/
+  main.tscn              # Root scene with SubViewport
+  shape_inspector.tscn   # Debug tool for vector shape visualization
+shaders/
+  phosphor_glow.gdshader # CRT bloom + phosphor persistence
+```
+
+### Key Design Decisions
+
+- **CAM bytecode preserved** — enemy AI scripts are interpreted, not rewritten. This ensures behavioral accuracy and is easy to validate against documentation.
+- **Two rendering systems** — Flipper/Pulsar use the ONELIN parametric system (shapes stretched between lane edges). All other entities use SCAPIC (centered, normalized shapes). This matches the original `ALDISP.MAC` and `ALVROM.MAC` source.
+- **20 Hz game tick** — matches the original `SECOND = 20`. Rendering runs at 60 FPS.
+- **Direct 3D math** — the WORSCR projection is just `screen = (world - eye) / depth`. No Mathbox or lookup table emulation needed.
+
+## Reference Documentation
+
+The original reverse-engineered documentation is linked as a git submodule at `docs/tempest-reference/` (from [sl4ppy/tempest-main](https://github.com/sl4ppy/tempest-main)):
+
+| Document | Contents |
+|----------|----------|
+| `SYSTEMS.md` | Core systems architecture |
+| `GAME_STATE_FLOW.md` | 19-state game state machine |
+| `CAM_SCRIPTS.md` | Enemy AI bytecode (20 opcodes, 11 scripts) |
+| `ENTITIES.md` | All entities, collision, animation data |
+| `PLAYFIELD.md` | 16 well shapes with coordinate tables |
+| `LEVEL_DATA.md` | Complete difficulty tables for 99 waves |
+| `DATA_ASSETS.md` | Vector shapes, sound data, text strings |
+
+## Status
+
+- **Phase 1: Playfield + Player** — Complete
+- **Phase 2: Enemies + CAM System** — Complete
+- **Phase 3: Game Loop + Scoring** — Next
+- **Phase 4: Sound + Polish** — Planned
+- **Phase 5: Validation** — Planned
+
+## License
+
+MIT

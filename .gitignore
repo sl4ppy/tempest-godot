@@ -16,3 +16,10 @@ desktop.ini
 .vscode/
 *.code-workspace
 .idea/
+
+# Claude Code
+.claude/
+.mcp.json
+
+# Media
+*.mp4

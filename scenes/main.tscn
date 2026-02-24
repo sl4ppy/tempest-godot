@@ -1,11 +1,24 @@
-[gd_scene load_steps=2 format=3 uid="uid://main"]
+[gd_scene load_steps=8 format=3 uid="uid://main"]
 
 [ext_resource type="Script" path="res://scripts/game_manager.gd" id="1_game_manager"]
+[ext_resource type="Script" path="res://scripts/well_renderer.gd" id="2_well_renderer"]
+[ext_resource type="Script" path="res://scripts/entities/player.gd" id="3_player"]
+[ext_resource type="Script" path="res://scripts/entities/projectile.gd" id="4_projectile"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="5_hud"]
+[ext_resource type="Script" path="res://scripts/entities/invader_manager.gd" id="6_invader_manager"]
+[ext_resource type="Script" path="res://scripts/entities/enemy_shots.gd" id="7_enemy_shots"]
 
-[node name="Main" type="Node2D"]
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_game_manager")
 
 [node name="GameViewport" type="SubViewportContainer" parent="."]
+layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -16,11 +29,25 @@ stretch = true
 [node name="SubViewport" type="SubViewport" parent="GameViewport"]
 handle_input_locally = false
 size = Vector2i(1024, 1024)
-render_target_clear_mode = 2
+render_target_clear_mode = 0
 render_target_update_mode = 4
 
 [node name="Well" type="Node2D" parent="GameViewport/SubViewport"]
+script = ExtResource("2_well_renderer")
 
 [node name="Entities" type="Node2D" parent="GameViewport/SubViewport"]
 
+[node name="Player" type="Node2D" parent="GameViewport/SubViewport/Entities"]
+script = ExtResource("3_player")
+
+[node name="Projectiles" type="Node2D" parent="GameViewport/SubViewport/Entities"]
+script = ExtResource("4_projectile")
+
+[node name="InvaderManager" type="Node2D" parent="GameViewport/SubViewport/Entities"]
+script = ExtResource("6_invader_manager")
+
+[node name="EnemyShots" type="Node2D" parent="GameViewport/SubViewport/Entities"]
+script = ExtResource("7_enemy_shots")
+
 [node name="HUD" type="Node2D" parent="GameViewport/SubViewport"]
+script = ExtResource("5_hud")
