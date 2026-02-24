@@ -20,6 +20,12 @@ var alive: bool = true
 var is_planar: bool = false
 var num_lanes: int = 16  # 16 for closed, 15 for planar
 
+# Death explosion. See ENTITIES.md § Player Death (SPLAT).
+const SPLAT_SPOKES: int = 16
+const DEATH_COLORS: Array[int] = [Colors.WHITE, Colors.YELLOW, Colors.RED]
+var death_timer: int = 0
+var death_max: int = 15
+
 # References
 var well: Node2D  # WellRenderer
 
@@ -37,6 +43,22 @@ func init_for_wave(well_renderer: Node2D, planar: bool) -> void:
 
 
 ## GETCUR + MOVCUR — read input and update position. Called each game tick.
+## Start death explosion animation at current position.
+func start_death(duration: int = 15) -> void:
+	alive = false
+	death_timer = duration
+	death_max = duration
+	queue_redraw()
+
+
+## Advance death animation by one tick. Returns true when finished.
+func tick_death() -> bool:
+	if death_timer > 0:
+		death_timer -= 1
+		queue_redraw()
+	return death_timer <= 0
+
+
 func move(input_delta: int) -> void:
 	if not alive:
 		return
@@ -68,7 +90,11 @@ func move(input_delta: int) -> void:
 
 
 func _draw() -> void:
-	if well == null or not alive or well.near_screen.size() < 16:
+	if well == null or well.near_screen.size() < 16:
+		return
+
+	if not alive:
+		_draw_death_explosion()
 		return
 
 	# Get screen position on the rim
@@ -80,7 +106,6 @@ func _draw() -> void:
 	var p2: Vector2 = well.near_screen[cursl2]
 
 	var tangent: Vector2 = (p2 - p1).normalized()
-	# Normal points toward center of well (shape Y-up = into the well)
 	var normal: Vector2 = Vector2(-tangent.y, tangent.x)
 	if normal.dot(well.screen_center - pos) < 0:
 		normal = -normal
@@ -90,5 +115,32 @@ func _draw() -> void:
 	var sz: float = maxf(seg_len, 30.0)
 	var color: Color = Colors.get_color(Colors.YELLOW)
 
-	# Draw original LIFE1 vector shape
 	VS.draw_shape(self, "player", pos, tangent, normal, sz, color, 2.5)
+
+
+## Draw SPLAT death explosion — expanding 16-spoke starburst with cycling colors.
+## See ENTITIES.md § Player Death, DATA_ASSETS.md § SPLAT shapes.
+func _draw_death_explosion() -> void:
+	if death_timer <= 0:
+		return
+
+	var frac: float = float(curspo % 16) / 16.0
+	var pos: Vector2 = well.get_rim_position(cursl1, frac)
+
+	# Progress: 0.0 (just died) → 1.0 (fully expanded)
+	var progress: float = 1.0 - (float(death_timer) / float(death_max))
+
+	# Scale expands progressively (CM=1,2,4,8 across 4 frames → exponential)
+	var radius: float = 20.0 + progress * progress * 120.0
+
+	# Color cycles through white → yellow → red
+	var color_idx: int = (death_max - death_timer) % DEATH_COLORS.size()
+	var color: Color = Colors.get_color(DEATH_COLORS[color_idx])
+
+	# Draw 16-spoke starburst (SPOK16 pattern)
+	for i in SPLAT_SPOKES:
+		var angle: float = float(i) * TAU / float(SPLAT_SPOKES)
+		# Add slight random jitter per spoke for organic feel
+		var spoke_len: float = radius * (0.7 + 0.3 * absf(sin(angle * 3.0 + progress * 5.0)))
+		var end: Vector2 = pos + Vector2.from_angle(angle) * spoke_len
+		draw_line(pos, end, color, maxf(2.5 - progress * 1.5, 1.0))

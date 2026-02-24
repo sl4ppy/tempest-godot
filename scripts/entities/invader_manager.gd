@@ -13,6 +13,14 @@ const ZABFUS: int = 4  # Fuseball
 
 const MAX_INVADERS: int = 6
 const MAX_NYMPHS: int = 32
+const MAX_EXPLOSIONS: int = 10
+
+# Explosion animation: 4-frame expanding 16-spoke starburst (EXPL1-4).
+# Scale factors double each frame: 1, 2, 4, 8. See DATA_ASSETS.md § EXPL shapes.
+const EXPL_FRAMES: int = 4
+const EXPL_FRAME_DURATION: int = 3  # Ticks per frame (total = 12 ticks)
+const EXPL_SPOKES: int = 16
+const EXPL_BASE_RADIUS: float = 8.0  # VG units at scale 1
 
 # Enemy colors
 const TYPE_COLORS: Array[int] = [
@@ -26,6 +34,7 @@ const TYPE_COLORS: Array[int] = [
 # Invader pool (array of dictionaries)
 var invaders: Array[Dictionary] = []
 var nymphs: Array[Dictionary] = []
+var explosions: Array[Dictionary] = []
 
 # CAM interpreter instance
 var cam: CAMInterpreter = CAMInterpreter.new()
@@ -58,6 +67,8 @@ func _ready() -> void:
 		invaders.append(_make_invader())
 	for i in MAX_NYMPHS:
 		nymphs.append({"active": false, "y": 0.0, "lane": 0, "type": 0})
+	for i in MAX_EXPLOSIONS:
+		explosions.append({"active": false, "lane": 0, "y": 0.0, "timer": 0, "color_idx": 0})
 	spikes.resize(16)
 
 
@@ -166,11 +177,15 @@ func is_wave_clear() -> bool:
 
 
 ## Kill an invader at the given index. Returns score points.
+## Spawns a EXPL1-4 starburst explosion at the enemy's position.
 func kill_invader(idx: int) -> int:
 	if idx < 0 or idx >= MAX_INVADERS or not invaders[idx].active:
 		return 0
 	var inv: Dictionary = invaders[idx]
 	var points: int = _get_score(inv.type, inv.is_chaser)
+
+	# Spawn explosion at enemy position
+	_spawn_explosion(inv.l1, inv.y, TYPE_COLORS[inv.type])
 
 	if inv.type == ZABTAN:
 		_split_tanker(inv)
@@ -181,6 +196,28 @@ func kill_invader(idx: int) -> int:
 	else:
 		invader_count -= 1
 	return points
+
+
+## Create an explosion effect at a given lane and depth.
+func _spawn_explosion(lane: int, y_depth: float, color_idx: int) -> void:
+	for expl in explosions:
+		if not expl.active:
+			expl.active = true
+			expl.lane = lane
+			expl.y = y_depth
+			expl.timer = EXPL_FRAMES * EXPL_FRAME_DURATION
+			expl.color_idx = color_idx
+			return
+
+
+## Advance all active explosions. Called each game tick.
+func tick_explosions() -> void:
+	for expl in explosions:
+		if not expl.active:
+			continue
+		expl.timer -= 1
+		if expl.timer <= 0:
+			expl.active = false
 
 
 ## Get invader data for collision checks.
@@ -487,6 +524,7 @@ func _draw() -> void:
 	if well == null:
 		return
 	_draw_invaders()
+	_draw_explosions()
 
 
 func _draw_nymphs() -> void:
@@ -601,3 +639,34 @@ func _draw_invaders() -> void:
 					lane_width, color, 2.0)
 			_:
 				continue
+
+
+## Draw EXPL1-4 expanding starbursts. See DATA_ASSETS.md § EXPL shapes.
+func _draw_explosions() -> void:
+	for expl in explosions:
+		if not expl.active:
+			continue
+
+		var depth_frac: float = well.depth_to_frac(expl.y)
+		var center: Vector2 = well.get_lane_center(expl.lane, depth_frac)
+
+		# Frame index: 0-3, doubling scale each frame
+		var elapsed: int = (EXPL_FRAMES * EXPL_FRAME_DURATION) - expl.timer
+		@warning_ignore("integer_division")
+		var frame: int = mini(elapsed / EXPL_FRAME_DURATION, EXPL_FRAMES - 1)
+		var scale_factor: float = pow(2.0, float(frame))  # 1, 2, 4, 8
+		var radius: float = EXPL_BASE_RADIUS * scale_factor
+
+		# Perspective scale: smaller when deeper
+		var lane_edges: Array[Vector2] = well.get_lane_edges(expl.lane, depth_frac)
+		var persp_scale: float = lane_edges[0].distance_to(lane_edges[1]) / 40.0
+		radius *= maxf(persp_scale, 0.3)
+
+		var color: Color = Colors.get_color(expl.color_idx)
+		var line_w: float = maxf(2.5 - float(frame) * 0.5, 1.0)
+
+		# 16-spoke starburst
+		for i in EXPL_SPOKES:
+			var angle: float = float(i) * TAU / float(EXPL_SPOKES)
+			var end: Vector2 = center + Vector2.from_angle(angle) * radius
+			draw_line(center, end, color, line_w)

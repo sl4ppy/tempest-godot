@@ -35,10 +35,13 @@ shaders/         # CRT phosphor glow shader
 - **CAM bytecode VM**: Enemy AI runs as a bytecode interpreter (`cam_interpreter.gd`), executing the original 20 CAM opcodes. Do NOT rewrite enemy behaviors as imperative code.
 - **Direct 3D math**: The WORSCR projection is `screen = (world - eye) / depth`. No Mathbox emulation.
 - **Two entity rendering systems**: Flipper and Pulsar use the **ONELIN** parametric system (shapes drawn between lane edges via unit/perp VEC multipliers). All other entities use **SCAPIC** (centered, normalized shapes). Both implemented in `vector_shapes.gd`. See "Entity Rendering" section below.
+- **Vector beam font**: All in-game text rendered via `vector_font.gd` using exact character stroke data from `ANVGAN.MAC`. Autoload singleton `VectorFont`.
 - **Data-driven sound**: POKEY synthesis via AudioStreamGenerator using the original 4-byte sequence format (start_value, frame_count, change, num_changes).
 - **Fixed tick rate**: Game logic at 20 Hz (`SECOND = 20`), rendering at 60 FPS with interpolation.
 - **CRT aesthetic**: All vectors drawn to SubViewport, post-processed with phosphor glow shader (bloom + persistence).
 - **Perspective-correct depth**: Entity screen positions use inverse-depth mapping (`depth_to_frac()`) rather than linear lerp, matching the 1/y projection behavior.
+- **Attract mode AI**: `AUTOCU` greedy nearest-enemy targeting with POLDEL shortest-path polar distance. Replaces human input during demo.
+- **Inter-level drop**: `CDROP` state — player descends through well with acceleration `(20 + min(wave, 30)) / 256` per frame, can fire at spikes.
 
 ### Projection Formula
 

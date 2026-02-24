@@ -26,18 +26,52 @@ enum State {
 
 const SECOND: int = 20  # Game logic frames per second
 const TICK_RATE: float = 1.0 / SECOND
+const INITIAL_LIVES: int = 3
 
 var state: State = State.CLOGO
 var attract_mode: bool = true
 var current_wave: int = 1
 var score: int = 0
-var lives: int = 4
+var lives: int = INITIAL_LIVES
 var _tick_accumulator: float = 0.0
 var qframe: int = 0  # Global frame counter (wraps at 256)
 
 # Collision constants
 var ensize: Array[float] = [0, 0, 0, 0, 0]  # Per-type collision range
 var chacha: float = 0.0  # Shot-vs-shot collision distance
+
+# CPAUSE — generic timed pause utility. See GAME_STATE_FLOW.md § CPAUSE.
+var pause_timer: int = 0
+var pause_next_state: State = State.CPLAY
+
+# Death animation. See ENTITIES.md § Player Death (SPLAT).
+const DEATH_FRAMES: int = 15  # Total frames of death explosion
+var death_timer: int = 0
+var death_lane: int = 0  # Lane where player died
+var death_frac: float = 0.0  # Rim fraction at death
+
+# Warp transition (CNEWV2). See PLAYFIELD.md § 5.3.
+const WARP_SPEED: float = 24.0  # EYL += $18 per frame
+var warp_timer: int = 0
+var warp_phase: int = 0  # 0=zoom out, 1=zoom in
+var warp_eye_start: float = 0.0
+var warp_zadj_start: float = 0.0
+
+# Bonus life system. See GAME_STATE_FLOW.md scoring.
+const BONUS_THRESHOLDS: Array[int] = [20000, 60000]
+var next_bonus_idx: int = 0
+var bonus_flash_timer: int = 0
+
+# Game over
+var game_over_timer: int = 0
+
+# Inter-level drop (CDROP). See ENTITIES.md § Inter-Level Drop.
+var drop_velocity: float = 0.0  # 16-bit velocity: accumulates with acceleration
+var drop_y: float = 0x10  # Player depth during drop (starts at rim)
+
+# Wave bonus table (BONPTM). Points awarded at end of each wave.
+# Index = starting skill level (0-8). All waves above 8 use index 8.
+const WAVE_BONUS: Array[int] = [0, 60, 160, 320, 540, 740, 940, 1140, 1340]
 
 # Node references
 @onready var well: Node2D = $GameViewport/SubViewport/Well
@@ -68,9 +102,22 @@ var _saved_well_color: Color  # Restore after zap ends
 func _ready() -> void:
 	# Capture mouse for spinner input
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	_start_wave(current_wave)
+	# Start in attract/logo state — load wave 1 visuals but don't play
+	_load_wave_visuals(1)
+	state = State.CLOGO
+	attract_mode = true
+	hud.set_message("PRESS START")
 
 
+## Load well visuals only (for attract mode, warp transitions).
+func _load_wave_visuals(wave: int) -> void:
+	var shape_data: Dictionary = LevelData.get_well_data(wave)
+	well.load_shape(shape_data)
+	well.well_color = Colors.get_well_color(wave)
+	hud.update_display(score, lives, wave)
+
+
+## Full wave init — load shape, reset all entities, begin gameplay.
 func _start_wave(wave: int) -> void:
 	current_wave = wave
 	var shape_data: Dictionary = LevelData.get_well_data(wave)
@@ -81,11 +128,9 @@ func _start_wave(wave: int) -> void:
 	player.init_for_wave(well, shape_data.planar)
 	projectiles.init_for_wave(well)
 	enemy_mgr.init_for_wave(well, wave_params)
-	# Enemy shot speed computed by invader_manager via TIMES8(base_seed - 64)
 	enemy_shots.init_for_wave(well, enemy_mgr.get_charge_speed())
 	hud.update_display(score, lives, wave)
 
-	# Calculate collision distances. See ENTITIES.md § ENSIZE.
 	_calc_collision_distances(wave_params)
 
 	# Reset superzapper uses for new wave
@@ -93,6 +138,18 @@ func _start_wave(wave: int) -> void:
 	suztim = 0
 
 	state = State.CPLAY
+
+
+## Start a new game from attract mode.
+func _start_new_game(start_wave: int = 1) -> void:
+	attract_mode = false
+	attract_pause = SECOND * 3
+	score = 0
+	lives = INITIAL_LIVES
+	next_bonus_idx = 0
+	current_wave = start_wave
+	hud.set_message("")
+	_start_wave(current_wave)
 
 
 ## Calculate ENSIZE per type and CHACHA using integer math matching original.
@@ -128,8 +185,9 @@ func _input(event: InputEvent) -> void:
 		_fire_pressed = true
 	if event.is_action_pressed("superzapper"):
 		_zap_pressed = true
-	if event.is_action_pressed("start") and state == State.CLOGO:
-		_start_wave(1)
+	if event.is_action_pressed("start"):
+		if attract_mode:
+			_start_new_game(1)
 
 	# Mouse left-click fires too (since mouse is captured for spinner)
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -180,6 +238,10 @@ func _game_tick() -> void:
 			_state_play()
 		State.CENDLI:
 			_state_endlife()
+		State.CNEWLI:
+			_state_newlife()
+		State.CNWLF2:
+			_state_newlife2()
 		State.CENDWAV:
 			_state_endwave()
 		State.CNEWV2:
@@ -188,6 +250,10 @@ func _game_tick() -> void:
 			_state_boom()
 		State.CDROP:
 			_state_drop()
+		State.CENDGA:
+			_state_gameover()
+		State.CPAUSE:
+			_state_pause()
 		_:
 			pass
 
@@ -198,8 +264,39 @@ func set_state(new_state: State) -> void:
 
 # --- State handlers ---
 
+## CPAUSE — generic timed delay. Decrements timer, transitions to next state.
+func _set_pause(frames: int, next: State) -> void:
+	pause_timer = frames
+	pause_next_state = next
+	state = State.CPAUSE
+
+
+func _state_pause() -> void:
+	pause_timer -= 1
+	if pause_timer <= 0:
+		state = pause_next_state
+
+
+## CLOGO — Attract mode. Show well + "PRESS START" message.
+## After a brief pause, starts a demo game with AI control. See GAME_STATE_FLOW.md.
+var attract_pause: int = SECOND * 3  # 3 seconds before demo starts
+
 func _state_logo() -> void:
-	pass
+	# Rotate the well cursor slowly for visual interest
+	@warning_ignore("integer_division")
+	well.player_line = (qframe / 4) % 16
+	well.queue_redraw()
+
+	attract_pause -= 1
+	if attract_pause <= 0:
+		# Start demo game: random wave 1-8, single life
+		attract_mode = true
+		lives = 1
+		score = 0
+		next_bonus_idx = 0
+		current_wave = (randi() % 8) + 1
+		hud.set_message("")
+		_start_wave(current_wave)  # Sets state to CPLAY
 
 
 func _state_play() -> void:
@@ -207,7 +304,12 @@ func _state_play() -> void:
 	# See SYSTEMS.md § Execution Order
 
 	# 1. GETCUR + MOVCUR — read input, move player
-	player.move(_spinner_delta)
+	# In attract mode, AUTOCU replaces human input
+	var move_delta: int = _spinner_delta
+	if attract_mode:
+		move_delta = _autocu()
+		_fire_pressed = true  # Auto-fire during attract
+	player.move(move_delta)
 
 	# 2. Update well flashlight to follow player
 	well.player_line = player.cursl1
@@ -225,6 +327,9 @@ func _state_play() -> void:
 
 	# 5. MOVINV / MOVNYM / MOVSPK — advance all enemies
 	enemy_mgr.tick(player.cursl1, player.cursy, qframe)
+
+	# 5b. PROEXP — tick explosion animations
+	enemy_mgr.tick_explosions()
 
 	# Update spike rendering data from invader_manager → well_renderer
 	well.spike_depths = enemy_mgr.spikes
@@ -253,6 +358,12 @@ func _state_play() -> void:
 	# 11. Check wave clear
 	if enemy_mgr.is_wave_clear():
 		state = State.CENDWAV
+
+	# Clear timed HUD messages
+	if bonus_flash_timer > 0:
+		bonus_flash_timer -= 1
+		if bonus_flash_timer <= 0:
+			hud.set_message("")
 
 	# Update HUD
 	hud.update_display(score, lives, current_wave)
@@ -302,7 +413,7 @@ func _collide() -> void:
 				# Both destroyed
 				projectiles.active[i] = false
 				enemy_shots.deactivate(es.idx)
-				score += 50
+				_add_score(50)
 				break
 
 		if not projectiles.active[i]:
@@ -313,36 +424,120 @@ func _collide() -> void:
 			if inv_data.l1 == pl and absf(py - inv_data.y) < ensize[inv_data.type]:
 				# Hit! Kill invader
 				projectiles.active[i] = false
-				score += enemy_mgr.kill_invader(inv_data.idx)
+				_add_score(enemy_mgr.kill_invader(inv_data.idx))
 				break
 
 	projectiles.queue_redraw()
 
 
 func _player_die() -> void:
-	if state != State.CPLAY:
+	if state != State.CPLAY and state != State.CBOOM:
 		return
-	lives -= 1
-	if lives <= 0:
-		state = State.CENDGA
-	else:
-		state = State.CENDLI
+	player.start_death(DEATH_FRAMES)
+	# Clear active shots
+	projectiles.clear_all()
+	enemy_shots.clear_all()
+	state = State.CENDLI
 
 
+## CENDLI — death explosion animation, then transition to respawn or game over.
 func _state_endlife() -> void:
-	# Brief pause then restart wave
-	# TODO: death explosion animation
+	# Tick player death animation and any active enemy explosions
+	enemy_mgr.tick_explosions()
+	var done: bool = player.tick_death()
+
+	# Well color strobe during death
+	var hue: float = fmod(float(qframe) * 0.2, 1.0)
+	well.well_color = Color.from_hsv(hue, 1.0, 1.0)
+	well.queue_redraw()
+
+	if done:
+		# Restore well color
+		well.well_color = Colors.get_well_color(current_wave)
+		well.queue_redraw()
+		lives -= 1
+		if lives <= 0:
+			if attract_mode:
+				# Attract demo over — return to logo quickly
+				game_over_timer = SECOND
+				hud.set_message("PRESS START")
+			else:
+				game_over_timer = SECOND * 3  # 3 seconds
+				hud.set_message("GAME OVER")
+			state = State.CENDGA
+		else:
+			hud.update_display(score, lives, current_wave)
+			_set_pause(SECOND, State.CNEWLI)  # 1 second before respawn
+
+
+## CNEWLI — reinitialize wave for new life.
+func _state_newlife() -> void:
 	_start_wave(current_wave)
 
 
+## CNWLF2 — placeholder for new life part 2.
+func _state_newlife2() -> void:
+	state = State.CPLAY
+
+
+## CENDWAV — wave cleared. Award bonus, begin inter-level drop.
 func _state_endwave() -> void:
-	# Advance to next wave
-	current_wave += 1
-	_start_wave(current_wave)
+	# Award end-of-wave bonus
+	var bonus_idx: int = mini(current_wave - 1, WAVE_BONUS.size() - 1)
+	var bonus: int = WAVE_BONUS[bonus_idx]
+	if bonus > 0:
+		_add_score(bonus)
+		hud.set_message("BONUS %d" % bonus)
+	else:
+		hud.set_message("")
+
+	# Begin inter-level drop: player descends through well to destroy remaining spikes.
+	drop_velocity = 0.0
+	drop_y = player.cursy
+	state = State.CDROP
 
 
+## CNEWV2 — warp transition between waves. Camera dives INTO the well.
+## See PLAYFIELD.md § 5.3: EYL += $18 per frame (eye moves forward through tube).
+## Camera must NOT cross world.y = 0x10 (near rim) or projection inverts.
 func _state_warp() -> void:
-	pass
+	warp_timer += 1
+
+	# Phase 0: dive in (accelerating toward near rim) — 30 frames
+	# Phase 1: new well, zoom in from far away — 30 frames
+	const WARP_HALF: int = 30
+	const NEAR_Y: float = 0x10  # Near rim world Y — camera must stay below this
+
+	if warp_phase == 0:
+		# Quadratic ease-in: accelerates toward near rim, stops at 95%
+		var t: float = float(warp_timer) / float(WARP_HALF)
+		var max_forward: float = (NEAR_Y - warp_eye_start) * 0.95
+		well.eye.y = warp_eye_start + max_forward * t * t
+		well.queue_redraw()
+
+		if warp_timer >= WARP_HALF:
+			# Midpoint: load new well shape
+			_load_wave_visuals(current_wave)
+			var shape_data: Dictionary = LevelData.get_well_data(current_wave)
+			warp_eye_start = -float(shape_data.holeyl)
+			warp_zadj_start = float(shape_data.holzad) / 256.0
+			# Start camera far behind the new well (very small on screen)
+			well.eye.y = warp_eye_start - 300.0
+			warp_phase = 1
+			warp_timer = 0
+	else:
+		# Quadratic ease-out: decelerates as it approaches final position
+		var t: float = float(warp_timer) / float(WARP_HALF)
+		var far_start: float = warp_eye_start - 300.0
+		well.eye.y = lerpf(far_start, warp_eye_start, 1.0 - (1.0 - t) * (1.0 - t))
+		well.z_adjust = warp_zadj_start
+		well.queue_redraw()
+
+		if warp_timer >= WARP_HALF:
+			# Warp complete — start new wave
+			hud.set_message("SUPERZAPPER RECHARGE")
+			_start_wave(current_wave)
+			bonus_flash_timer = SECOND * 2
 
 
 ## PROSUZ — Activate superzapper. See ENTITIES.md § Superzapper.
@@ -361,6 +556,9 @@ func _state_boom() -> void:
 	# Superzapper active: cycle well colors, sequentially kill enemies.
 	# See ENTITIES.md § Superzapper, KILENE routine.
 
+	# Tick explosions from previous kills
+	enemy_mgr.tick_explosions()
+
 	# Player can still move during CBOOM
 	player.move(_spinner_delta)
 	well.player_line = player.cursl1
@@ -375,7 +573,7 @@ func _state_boom() -> void:
 		# Kill first active enemy found
 		for i in enemy_mgr.MAX_INVADERS:
 			if enemy_mgr.invaders[i].active:
-				score += enemy_mgr.kill_invader(i)
+				_add_score(enemy_mgr.kill_invader(i))
 				break
 
 	# Also clear enemy shots during superzapper
@@ -390,5 +588,106 @@ func _state_boom() -> void:
 		state = State.CPLAY
 
 
+## CENDGA — Game Over. Show message, then return to attract mode.
+func _state_gameover() -> void:
+	game_over_timer -= 1
+	if game_over_timer <= 0:
+		# Return to attract mode
+		attract_mode = true
+		attract_pause = SECOND * 3
+		hud.set_message("PRESS START")
+		_load_wave_visuals(1)
+		state = State.CLOGO
+
+
+## CDROP — Inter-level drop. Player descends through well, can hit spikes.
+## Acceleration = 20 + min(wave, 30) per frame. See ENTITIES.md § Inter-Level Drop.
 func _state_drop() -> void:
-	pass
+	# Player can still move and fire during drop
+	player.move(_spinner_delta)
+	well.player_line = player.cursl1
+	well.queue_redraw()
+
+	if _fire_pressed:
+		projectiles.fire(player.cursl1, player.cursl2)
+		_fire_pressed = false
+	_zap_pressed = false  # Superzapper disabled during drop
+
+	projectiles.move_all(enemy_mgr.spikes)
+
+	# Accelerating descent: velocity increases each frame
+	var accel: float = (20.0 + float(mini(current_wave, 30))) / 256.0
+	drop_velocity += accel
+	drop_y += drop_velocity
+	player.cursy = drop_y
+
+	# Check spike collision during drop — spike kills player
+	var player_lane: int = player.cursl1
+	if enemy_mgr.spikes.size() > player_lane:
+		if enemy_mgr.spikes[player_lane] < 0xF0 and drop_y >= float(enemy_mgr.spikes[player_lane]):
+			_player_die()
+			return
+
+	# Update spike rendering
+	well.spike_depths = enemy_mgr.spikes
+
+	# Check if player reached bottom of well
+	if drop_y >= 0xF0:
+		# Advance wave (cap at 99) and start warp
+		current_wave = mini(current_wave + 1, 99)
+		warp_timer = 0
+		warp_phase = 0
+		warp_eye_start = well.eye.y
+		warp_zadj_start = well.z_adjust
+		state = State.CNEWV2
+
+	hud.update_display(score, lives, current_wave)
+
+
+## AUTOCU — Attract mode AI. Greedy nearest-enemy targeting.
+## Scans all invaders, finds closest to player (smallest Y), moves toward it.
+## Returns simulated spinner delta (±9). See GAME_STATE_FLOW.md § Attract Mode.
+func _autocu() -> int:
+	var best_y: float = 0xFF
+	var best_lane: int = -1
+
+	# Find nearest enemy
+	for inv in enemy_mgr.invaders:
+		if inv.active and inv.y < best_y:
+			best_y = inv.y
+			best_lane = inv.l1
+
+	if best_lane < 0:
+		return 0  # No enemies, no movement
+
+	# POLDEL — shortest polar distance on 16-lane ring
+	var num_lanes: int = player.num_lanes
+	var delta: int = best_lane - player.cursl1
+	@warning_ignore("integer_division")
+	var half_lanes: int = num_lanes / 2
+	if not player.is_planar:
+		# Wrap around for closed wells
+		if delta > half_lanes:
+			delta -= num_lanes
+		elif delta < -half_lanes:
+			delta += num_lanes
+
+	if delta == 0:
+		return 0  # Already aligned
+	elif delta > 0:
+		return 9  # Move clockwise toward target
+	else:
+		return -9  # Move counter-clockwise toward target
+
+
+## Add points and check bonus life thresholds.
+func _add_score(points: int) -> void:
+	var old_score: int = score
+	score += points
+	# Check bonus life thresholds (20K, 60K)
+	if next_bonus_idx < BONUS_THRESHOLDS.size():
+		if old_score < BONUS_THRESHOLDS[next_bonus_idx] and score >= BONUS_THRESHOLDS[next_bonus_idx]:
+			lives += 1
+			bonus_flash_timer = SECOND  # Flash for 1 second
+			next_bonus_idx += 1
+	hud.update_display(score, lives, current_wave)
