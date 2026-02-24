@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3 uid="uid://main"]
+[gd_scene load_steps=10 format=3 uid="uid://main"]
 
 [ext_resource type="Script" path="res://scripts/game_manager.gd" id="1_game_manager"]
 [ext_resource type="Script" path="res://scripts/well_renderer.gd" id="2_well_renderer"]
@@ -7,6 +7,14 @@
 [ext_resource type="Script" path="res://scripts/hud.gd" id="5_hud"]
 [ext_resource type="Script" path="res://scripts/entities/invader_manager.gd" id="6_invader_manager"]
 [ext_resource type="Script" path="res://scripts/entities/enemy_shots.gd" id="7_enemy_shots"]
+[ext_resource type="Shader" path="res://shaders/phosphor_glow.gdshader" id="8_shader"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_crt"]
+shader = ExtResource("8_shader")
+shader_parameter/bloom_radius = 2.5
+shader_parameter/bloom_intensity = 1.4
+shader_parameter/persistence = 0.82
+shader_parameter/brightness = 1.5
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -51,3 +59,14 @@ script = ExtResource("7_enemy_shots")
 
 [node name="HUD" type="Node2D" parent="GameViewport/SubViewport"]
 script = ExtResource("5_hud")
+
+[node name="CRTEffect" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+material = SubResource("ShaderMaterial_crt")
+color = Color(1, 1, 1, 1)

@@ -69,6 +69,25 @@ var game_over_timer: int = 0
 var drop_velocity: float = 0.0  # 16-bit velocity: accumulates with acceleration
 var drop_y: float = 0x10  # Player depth during drop (starts at rim)
 
+# Wave select (CREQRAT). See GAME_STATE_FLOW.md § CREQRAT.
+const SELECT_TIMEOUT: int = SECOND * 10  # 10-second countdown
+var hi_wave: int = 1  # Highest wave reached (unlocks starting waves)
+var select_cursor: int = 0  # Currently selected index in available waves
+var select_timer: int = 0  # Countdown in game ticks
+var select_second_timer: int = 0  # Sub-timer for counting seconds
+var select_waves: Array[int] = []  # Available waves for selection
+
+# High score system (CHISCHK/CGETINI/CDLADR). See GAME_STATE_FLOW.md.
+const NHISCO: int = 10  # Number of high score entries
+const INITIAL_TIMEOUT: int = SECOND * 15  # 15 seconds for initials entry
+var high_scores: Array[Dictionary] = []  # {score: int, initials: String}
+var hs_insert_idx: int = -1  # Where new score was inserted (-1 = not qualifying)
+var hs_initials: String = "   "  # Current initials being entered
+var hs_slot: int = 0  # Active initial slot (0, 1, 2)
+var hs_char_idx: int = 0  # Current char in alphabet (0=A, 25=Z, 26=space)
+var hs_timer: int = 0  # Countdown timer for initials entry
+var ladder_timer: int = 0  # Display duration for high score ladder
+
 # Wave bonus table (BONPTM). Points awarded at end of each wave.
 # Index = starting skill level (0-8). All waves above 8 use index 8.
 const WAVE_BONUS: Array[int] = [0, 60, 160, 320, 540, 740, 940, 1140, 1340]
@@ -102,6 +121,8 @@ var _saved_well_color: Color  # Restore after zap ends
 func _ready() -> void:
 	# Capture mouse for spinner input
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	# Initialize high score table with default entries
+	_init_high_scores()
 	# Start in attract/logo state — load wave 1 visuals but don't play
 	_load_wave_visuals(1)
 	state = State.CLOGO
@@ -120,6 +141,10 @@ func _load_wave_visuals(wave: int) -> void:
 ## Full wave init — load shape, reset all entities, begin gameplay.
 func _start_wave(wave: int) -> void:
 	current_wave = wave
+	# Track highest wave reached for wave select unlock
+	if not attract_mode and wave > hi_wave:
+		hi_wave = wave
+
 	var shape_data: Dictionary = LevelData.get_well_data(wave)
 	var wave_params: Dictionary = LevelData.get_wave_params(wave)
 
@@ -129,6 +154,7 @@ func _start_wave(wave: int) -> void:
 	projectiles.init_for_wave(well)
 	enemy_mgr.init_for_wave(well, wave_params)
 	enemy_shots.init_for_wave(well, enemy_mgr.get_charge_speed())
+	hud.show_gameplay()
 	hud.update_display(score, lives, wave)
 
 	_calc_collision_distances(wave_params)
@@ -140,15 +166,15 @@ func _start_wave(wave: int) -> void:
 	state = State.CPLAY
 
 
-## Start a new game from attract mode.
+## Start a new game directly (used by attract mode demo).
 func _start_new_game(start_wave: int = 1) -> void:
-	attract_mode = false
 	attract_pause = SECOND * 3
 	score = 0
 	lives = INITIAL_LIVES
 	next_bonus_idx = 0
 	current_wave = start_wave
 	hud.set_message("")
+	hud.show_gameplay()
 	_start_wave(current_wave)
 
 
@@ -187,7 +213,7 @@ func _input(event: InputEvent) -> void:
 		_zap_pressed = true
 	if event.is_action_pressed("start"):
 		if attract_mode:
-			_start_new_game(1)
+			_begin_wave_select()
 
 	# Mouse left-click fires too (since mouse is captured for spinner)
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -234,6 +260,8 @@ func _game_tick() -> void:
 	match state:
 		State.CLOGO:
 			_state_logo()
+		State.CREQRAT:
+			_state_wave_select()
 		State.CPLAY:
 			_state_play()
 		State.CENDLI:
@@ -252,6 +280,12 @@ func _game_tick() -> void:
 			_state_drop()
 		State.CENDGA:
 			_state_gameover()
+		State.CHISCHK:
+			_state_hiscore_check()
+		State.CGETINI:
+			_state_get_initials()
+		State.CDLADR:
+			_state_ladder()
 		State.CPAUSE:
 			_state_pause()
 		_:
@@ -588,16 +622,16 @@ func _state_boom() -> void:
 		state = State.CPLAY
 
 
-## CENDGA — Game Over. Show message, then return to attract mode.
+## CENDGA — Game Over. Show message, then check high scores.
 func _state_gameover() -> void:
 	game_over_timer -= 1
 	if game_over_timer <= 0:
-		# Return to attract mode
-		attract_mode = true
-		attract_pause = SECOND * 3
-		hud.set_message("PRESS START")
-		_load_wave_visuals(1)
-		state = State.CLOGO
+		if attract_mode:
+			# Attract demo over — show high score ladder briefly, then return to logo
+			_return_to_attract()
+		else:
+			# Real game over — check if score qualifies for high score table
+			state = State.CHISCHK
 
 
 ## CDROP — Inter-level drop. Player descends through well, can hit spikes.
@@ -642,6 +676,183 @@ func _state_drop() -> void:
 		state = State.CNEWV2
 
 	hud.update_display(score, lives, current_wave)
+
+
+## Return to attract mode (from game over or high score display).
+func _return_to_attract() -> void:
+	attract_mode = true
+	attract_pause = SECOND * 3
+	hud.show_gameplay()
+	hud.set_message("PRESS START")
+	_load_wave_visuals(1)
+	state = State.CLOGO
+
+
+# --- Wave Select ---
+
+## Begin wave select: build available wave list, start timer.
+func _begin_wave_select() -> void:
+	attract_mode = false
+	score = 0
+	lives = INITIAL_LIVES
+	next_bonus_idx = 0
+
+	# Build available starting waves: 1, then every wave the player has reached
+	# Simplified: offer waves 1 through hi_wave, capped at 16 options
+	select_waves = []
+	for w in range(1, mini(hi_wave + 1, 17)):
+		select_waves.append(w)
+	select_cursor = 0
+	select_timer = SELECT_TIMEOUT
+	select_second_timer = SECOND
+
+	hud.show_wave_select(select_waves, select_cursor, 10)
+	state = State.CREQRAT
+
+
+## CREQRAT — Wave select. Spinner moves cursor, fire confirms. 10-second timeout.
+func _state_wave_select() -> void:
+	# Timer countdown (ticks → seconds display)
+	select_timer -= 1
+	select_second_timer -= 1
+	if select_second_timer <= 0:
+		select_second_timer = SECOND
+
+	@warning_ignore("integer_division")
+	var seconds_left: int = select_timer / SECOND
+
+	# Spinner moves cursor through available waves
+	if _spinner_delta > 0 and select_cursor < select_waves.size() - 1:
+		select_cursor += 1
+	elif _spinner_delta < 0 and select_cursor > 0:
+		select_cursor -= 1
+
+	# Fire or superzapper confirms selection
+	if _fire_pressed or _zap_pressed:
+		_fire_pressed = false
+		_zap_pressed = false
+		_confirm_wave_select()
+		return
+
+	# Timeout: auto-select current cursor position
+	if select_timer <= 0:
+		_confirm_wave_select()
+		return
+
+	_fire_pressed = false
+	_zap_pressed = false
+	hud.show_wave_select(select_waves, select_cursor, seconds_left)
+
+
+func _confirm_wave_select() -> void:
+	current_wave = select_waves[select_cursor]
+	hud.set_message("")
+	hud.show_gameplay()
+	_start_wave(current_wave)
+
+
+# --- High Score System ---
+
+## Initialize default high score table.
+func _init_high_scores() -> void:
+	high_scores.clear()
+	# Default entries: descending scores with placeholder initials
+	var default_scores: Array[int] = [10000, 9000, 8000, 7000, 6000, 5000, 4000, 3000, 2000, 1000]
+	var default_initials: Array[String] = ["DRJ", "RSM", "LED", "GDB", "DVL", "MJP", "ZZZ", "AAA", "TST", "---"]
+	for i in NHISCO:
+		high_scores.append({"score": default_scores[i], "initials": default_initials[i]})
+
+
+## CHISCHK — Check if player's score qualifies for high score table.
+func _state_hiscore_check() -> void:
+	hs_insert_idx = -1
+	# Find insertion point (table is sorted descending)
+	for i in high_scores.size():
+		if score > high_scores[i].score:
+			hs_insert_idx = i
+			break
+
+	if hs_insert_idx >= 0:
+		# Insert new entry, push last entry out
+		high_scores.insert(hs_insert_idx, {"score": score, "initials": "   "})
+		if high_scores.size() > NHISCO:
+			high_scores.resize(NHISCO)
+		# Go to initials entry
+		hs_initials = "   "
+		hs_slot = 0
+		hs_char_idx = 0  # Start at 'A'
+		hs_timer = INITIAL_TIMEOUT
+		hud.show_initials_entry(high_scores, hs_initials, hs_slot, score, hs_insert_idx, hs_char_idx)
+		state = State.CGETINI
+	else:
+		# Score doesn't qualify — show ladder briefly and return to attract
+		ladder_timer = SECOND * 3
+		hud.show_high_scores(high_scores, -1, "PRESS START")
+		state = State.CDLADR
+
+
+## CGETINI — Initials entry. Spinner cycles A-Z+space, fire confirms each slot.
+func _state_get_initials() -> void:
+	hs_timer -= 1
+
+	# Spinner cycles through characters
+	if _spinner_delta > 0:
+		hs_char_idx = (hs_char_idx + 1) % 27  # A-Z + space
+	elif _spinner_delta < 0:
+		hs_char_idx = (hs_char_idx - 1) % 27
+		if hs_char_idx < 0:
+			hs_char_idx += 27
+
+	# Update current character in initials string
+	var ch: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ "[hs_char_idx]
+	hs_initials = hs_initials.substr(0, hs_slot) + ch + hs_initials.substr(hs_slot + 1)
+
+	# Fire confirms current slot and advances to next
+	if _fire_pressed or _zap_pressed:
+		_fire_pressed = false
+		_zap_pressed = false
+		hs_slot += 1
+		hs_char_idx = 0  # Reset to 'A' for next slot
+		if hs_slot >= 3:
+			_finish_initials()
+			return
+
+	# Timeout: accept current initials
+	if hs_timer <= 0:
+		_finish_initials()
+		return
+
+	_fire_pressed = false
+	_zap_pressed = false
+	hud.show_initials_entry(high_scores, hs_initials, hs_slot, score, hs_insert_idx, hs_char_idx)
+
+
+func _finish_initials() -> void:
+	# Store initials in the high score table
+	if hs_insert_idx >= 0 and hs_insert_idx < high_scores.size():
+		high_scores[hs_insert_idx].initials = hs_initials.strip_edges()
+		if high_scores[hs_insert_idx].initials == "":
+			high_scores[hs_insert_idx].initials = "   "
+	# Update the global high score display
+	if high_scores.size() > 0:
+		hud.high_score = high_scores[0].score
+	# Show ladder with the new entry highlighted
+	ladder_timer = SECOND * 4
+	hud.show_high_scores(high_scores, hs_insert_idx, "PRESS START")
+	state = State.CDLADR
+
+
+## CDLADR — Display high score ladder, then return to attract.
+func _state_ladder() -> void:
+	ladder_timer -= 1
+	# Start button during ladder → wave select
+	if _fire_pressed or _zap_pressed:
+		_fire_pressed = false
+		_zap_pressed = false
+		_begin_wave_select()
+		return
+	if ladder_timer <= 0:
+		_return_to_attract()
 
 
 ## AUTOCU — Attract mode AI. Greedy nearest-enemy targeting.

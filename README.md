@@ -8,15 +8,17 @@ This is a **behavioral recreation** — we implement the original game logic dir
 
 ## Screenshots
 
-| Attract Mode | Gameplay |
+| Attract Mode | CRT Phosphor Glow |
 |:---:|:---:|
-| ![Attract screen](images/attract.png) | ![Gameplay](images/gameplay.png) |
+| ![Attract screen](images/attract.png) | ![CRT glow effect](images/crt_glow.png) |
 
-*Left: Title screen with vector beam font and "PRESS START" message. Right: Wave 6 gameplay — player firing at enemies on a triangular well with nymphs spawning from the far end.*
+*Left: Title screen with vector beam font. Right: Same screen with CRT phosphor glow shader — bloom and brightness simulate vector monitor phosphors.*
 
-![Gameplay action](images/gameplay2.png)
+| Gameplay | Gameplay |
+|:---:|:---:|
+| ![Gameplay](images/gameplay.png) | ![Gameplay 2](images/gameplay2.png) |
 
-*Active gameplay showing the player cursor, flipper enemy, player shots (cyan dots), and nymph particles spawning deep in the well.*
+*Wave 6 gameplay — player firing at enemies on a triangular well, with nymphs spawning from the far end and flipper enemies approaching.*
 
 ## Features
 
@@ -36,9 +38,11 @@ This is a **behavioral recreation** — we implement the original game logic dir
 - **Inter-level drop** — player descends through well after clearing enemies, can fire at remaining spikes
 - **Warp transitions** — two-phase camera animation between waves
 - **Attract mode with demo AI** — greedy nearest-enemy targeting (AUTOCU)
+- **Wave select screen** — "Rate Yourself" starting wave picker with spinner navigation and 10-second timeout
+- **High score system** — 10-entry table with 3-initial entry, spinner character cycling
 - **Bonus life system** — extra lives at 20,000 and 60,000 points
 - **99-wave difficulty progression** from original lookup tables
-- **CRT phosphor glow** shader (bloom + persistence) on SubViewport
+- **CRT phosphor glow** shader — 13-tap bloom simulating vector monitor phosphors
 - **Mouse spinner input** — captured mouse for analog arcade spinner feel
 
 ## Running
