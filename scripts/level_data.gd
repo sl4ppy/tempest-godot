@@ -2,6 +2,15 @@ extends Node
 ## Autoloaded singleton. Contains all level/wave data from LEVEL_DATA.md.
 ## Access as: LevelData.get_wave_params(wave_number)
 
+# Skill level selection table (LEVEL array from ALWELG.MAC).
+# Maps selection index → starting wave number (values are wave-1 in source; here stored as actual wave).
+# 28 entries total, displayed in two columns on the "Rate Yourself" screen.
+# See LEVEL_DATA.md § Skill Level Selection Table.
+const LEVEL_TABLE: Array[int] = [
+	1, 3, 5, 7, 9, 11, 13, 15, 17, 20, 34, 24, 38, 28,
+	49, 51, 36, 40, 44, 71, 73, 82, 86, 90, 99, 101, 115, 129,
+]
+
 # Well shape sequence (WELSEQ) — maps wave mod 16 to shape index
 # See PLAYFIELD.md Appendix A
 const WELL_SEQUENCE: Array[int] = [

@@ -70,16 +70,17 @@ var drop_velocity: float = 0.0  # 16-bit velocity: accumulates with acceleration
 var drop_y: float = 0x10  # Player depth during drop (starts at rim)
 
 # Wave select (CREQRAT). See GAME_STATE_FLOW.md § CREQRAT.
-const SELECT_TIMEOUT: int = SECOND * 10  # 10-second countdown
-var hi_wave: int = 1  # Highest wave reached (unlocks starting waves)
-var select_cursor: int = 0  # Currently selected index in available waves
-var select_timer: int = 0  # Countdown in game ticks
-var select_second_timer: int = 0  # Sub-timer for counting seconds
-var select_waves: Array[int] = []  # Available waves for selection
+# Uses LevelData.LEVEL_TABLE (28 entries) gated by HIRATE.
+const SELECT_TIMEOUT: int = 10  # 10-second countdown (QTMPAUS in seconds)
+var hi_wave: int = 1  # Highest wave reached (HIWAVE — unlocks starting waves)
+var hirate: int = 0  # Max index into LEVEL_TABLE player can select
+var select_cursor: int = 0  # Currently selected index in LEVEL_TABLE
+var select_timer_seconds: int = 0  # Countdown in seconds (QTMPAUS)
+var select_timer_ticks: int = 0  # Sub-timer (TIMHIS) for counting seconds
 
 # High score system (CHISCHK/CGETINI/CDLADR). See GAME_STATE_FLOW.md.
-const NHISCO: int = 10  # Number of high score entries
-const INITIAL_TIMEOUT: int = SECOND * 15  # 15 seconds for initials entry
+const NHISCO: int = 8  # Number of high score entries. See ALCOMN.md.
+const INITIAL_TIMEOUT: int = SECOND * 15  # 15 seconds for initials entry (ITIMIN)
 var high_scores: Array[Dictionary] = []  # {score: int, initials: String}
 var hs_insert_idx: int = -1  # Where new score was inserted (-1 = not qualifying)
 var hs_initials: String = "   "  # Current initials being entered
@@ -123,11 +124,9 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	# Initialize high score table with default entries
 	_init_high_scores()
-	# Start in attract/logo state — load wave 1 visuals but don't play
-	_load_wave_visuals(1)
-	state = State.CLOGO
+	# Start in attract mode — begin with high score display (CDLADR)
 	attract_mode = true
-	hud.set_message("PRESS START")
+	_begin_attract_hiscore()
 
 
 ## Load well visuals only (for attract mode, warp transitions).
@@ -166,18 +165,6 @@ func _start_wave(wave: int) -> void:
 	state = State.CPLAY
 
 
-## Start a new game directly (used by attract mode demo).
-func _start_new_game(start_wave: int = 1) -> void:
-	attract_pause = SECOND * 3
-	score = 0
-	lives = INITIAL_LIVES
-	next_bonus_idx = 0
-	current_wave = start_wave
-	hud.set_message("")
-	hud.show_gameplay()
-	_start_wave(current_wave)
-
-
 ## Calculate ENSIZE per type and CHACHA using integer math matching original.
 ## See ENTITIES.md § ENSIZE: speed_hi = (seed * 8) >> 8, ENSIZE = (abs(speed_hi) + 13) / 2
 func _calc_collision_distances(params: Dictionary) -> void:
@@ -212,7 +199,8 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("superzapper"):
 		_zap_pressed = true
 	if event.is_action_pressed("start"):
-		if attract_mode:
+		if attract_mode and state != State.CPLAY:
+			# Start button exits attract mode and begins a new game
 			_begin_wave_select()
 
 	# Mouse left-click fires too (since mouse is captured for spinner)
@@ -260,6 +248,11 @@ func _game_tick() -> void:
 	match state:
 		State.CLOGO:
 			_state_logo()
+		State.CDLADR:
+			if attract_mode:
+				_state_attract_ladder()
+			else:
+				_state_ladder()
 		State.CREQRAT:
 			_state_wave_select()
 		State.CPLAY:
@@ -284,8 +277,6 @@ func _game_tick() -> void:
 			_state_hiscore_check()
 		State.CGETINI:
 			_state_get_initials()
-		State.CDLADR:
-			_state_ladder()
 		State.CPAUSE:
 			_state_pause()
 		_:
@@ -311,26 +302,91 @@ func _state_pause() -> void:
 		state = pause_next_state
 
 
-## CLOGO — Attract mode. Show well + "PRESS START" message.
-## After a brief pause, starts a demo game with AI control. See GAME_STATE_FLOW.md.
-var attract_pause: int = SECOND * 3  # 3 seconds before demo starts
+## Attract mode cycle. See ATTRACT_MODE.md.
+## Sequence: CDLADR (high scores) → CLOGO (logo) → Demo gameplay → repeat.
+##
+## CLOGO has two phases driven by BOXPRO and LOGPRO in ALSCO2.MAC:
+## Phase 0 (BOXPRO): Rainbow of VORBOX. FARY 0x19→0xA0 (+0x14/frame).
+##   Once FARY>=0x50, NEARY increases by FARINC(8). Ends when NEARY>=FARY.
+## Phase 1 (LOGPRO): Rainbow of TEMPEST logo. NEARY decreases by 1 toward 0x30.
+##   Once NEARY<0x80, FARY decreases by 1. FARY clamped >= NEARY.
+## High score display: ITIMHI=60 frames@60Hz ≈ 20 ticks@20Hz.
+## LOGINI: QTMPAUS=0xDF(223 decimal ≈ 11 seconds), game state CPAUSE.
 
+# Logo / attract timing
+const ATTRACT_HISCORE_TIME: int = 20  # ~1 second (ITIMHI ≈ 60 frames@60Hz)
+# BOXPRO/LOGPRO are self-timed via FARY/NEARY convergence, not fixed timers.
+# LOGINI sets QTMPAUS=0xDF for the overall pause, but the display routines
+# advance FARY/NEARY each frame and transition when they converge.
+
+var attract_timer: int = 0
+
+# BOXPRO/LOGPRO state — driven by FARY/NEARY depth parameters
+# See ALSCO2.MAC § LOGINI, BOXPRO, LOGPRO
+var logo_phase: int = 0    # 0=BOXPRO (shrinking box), 1=LOGPRO (approaching logo)
+var logo_fary: int = 0x19  # Far depth point
+var logo_neary: int = 0x18 # Near depth point
+const FARINC: int = 8      # NEARY increment in BOXPRO (FARINC constant)
+
+## Begin attract mode high score display phase (CDLADR).
+func _begin_attract_hiscore() -> void:
+	attract_mode = true
+	attract_timer = ATTRACT_HISCORE_TIME
+	hud.show_high_scores(high_scores, -1, "")
+	state = State.CDLADR
+
+
+## CDLADR — Display high score table during attract mode.
+func _state_attract_ladder() -> void:
+	attract_timer -= 1
+	# Update INSERT COIN flash
+	hud.show_high_scores(high_scores, -1, "")
+	if attract_timer <= 0:
+		_begin_logo()
+
+
+## Begin logo phase (CLOGO). See ALSCO2.MAC § LOGINI.
+## FARY=0x19, NEARY=0x18, display state=CDBOXP (box process).
+func _begin_logo() -> void:
+	logo_phase = 0
+	logo_fary = 0x19
+	logo_neary = 0x18
+	state = State.CLOGO
+
+
+## CLOGO — Logo presentation driven by BOXPRO/LOGPRO.
+## See ALSCO2.MAC § BOXPRO, LOGPRO.
 func _state_logo() -> void:
-	# Rotate the well cursor slowly for visual interest
-	@warning_ignore("integer_division")
-	well.player_line = (qframe / 4) % 16
-	well.queue_redraw()
-
-	attract_pause -= 1
-	if attract_pause <= 0:
-		# Start demo game: random wave 1-8, single life
-		attract_mode = true
-		lives = 1
-		score = 0
-		next_bonus_idx = 0
-		current_wave = (randi() % 8) + 1
-		hud.set_message("")
-		_start_wave(current_wave)  # Sets state to CPLAY
+	if logo_phase == 0:
+		# BOXPRO: Shrinking box rainbow
+		# FARY increases by 0x14 each frame until 0xA0
+		if logo_fary < 0xA0:
+			logo_fary = mini(logo_fary + 0x14, 0xA0)
+		# Once FARY >= 0x50, NEARY also increases by FARINC
+		if logo_fary >= 0x50:
+			logo_neary += FARINC
+			# When NEARY >= FARY → transition to LOGPRO
+			if logo_neary >= logo_fary:
+				logo_neary = 0xA0
+				logo_fary = 0xA0
+				logo_phase = 1
+		hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
+	else:
+		# LOGPRO: Approaching logo rainbow
+		# NEARY decreases by 1 each frame while >= 0x30
+		if logo_neary >= 0x30:
+			logo_neary -= 1
+		# Once NEARY < 0x80, FARY also decreases by 1
+		if logo_neary < 0x80:
+			logo_fary -= 1
+			if logo_fary < logo_neary:
+				logo_fary = logo_neary
+		hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
+		# LOGPRO converges when FARY reaches NEARY at minimum depth.
+		# Original uses CPAUSE with QTMPAUS=0xDF (223 frames ≈ 11 sec total logo).
+		# We transition when the rainbow has fully converged.
+		if logo_fary <= logo_neary and logo_neary < 0x30:
+			_begin_attract_demo()
 
 
 func _state_play() -> void:
@@ -492,9 +548,8 @@ func _state_endlife() -> void:
 		lives -= 1
 		if lives <= 0:
 			if attract_mode:
-				# Attract demo over — return to logo quickly
+				# Attract demo over — short pause then back to attract cycle
 				game_over_timer = SECOND
-				hud.set_message("PRESS START")
 			else:
 				game_over_timer = SECOND * 3  # 3 seconds
 				hud.set_message("GAME OVER")
@@ -623,14 +678,15 @@ func _state_boom() -> void:
 
 
 ## CENDGA — Game Over. Show message, then check high scores.
+## See GAME_STATE_FLOW.md § CENDGA. Attract demo ends → back to CDLADR.
 func _state_gameover() -> void:
 	game_over_timer -= 1
 	if game_over_timer <= 0:
 		if attract_mode:
-			# Attract demo over — show high score ladder briefly, then return to logo
+			# Attract demo over — return to attract cycle (high scores → logo → ...)
 			_return_to_attract()
 		else:
-			# Real game over — check if score qualifies for high score table
+			# Real game over — immediately check high scores (CHISCHK is transient)
 			state = State.CHISCHK
 
 
@@ -678,74 +734,122 @@ func _state_drop() -> void:
 	hud.update_display(score, lives, current_wave)
 
 
-## Return to attract mode (from game over or high score display).
-func _return_to_attract() -> void:
+## Begin attract mode gameplay demo. See ATTRACT_MODE.md § Gameplay Demonstration.
+## Selects random wave from first 8 LEVEL entries, sets 1 life, starts gameplay.
+func _begin_attract_demo() -> void:
 	attract_mode = true
-	attract_pause = SECOND * 3
+	lives = 1
+	score = 0
+	next_bonus_idx = 0
+	# Choose random level from first 8 entries of LEVEL table (AND I,7)
+	var level_idx: int = randi() % 8
+	current_wave = LevelData.LEVEL_TABLE[level_idx]
 	hud.show_gameplay()
-	hud.set_message("PRESS START")
-	_load_wave_visuals(1)
-	state = State.CLOGO
+	hud.set_message("")
+	_start_wave(current_wave)  # Sets state to CPLAY
 
 
-# --- Wave Select ---
+## Return to attract mode (from game over or high score display).
+## Re-enters the attract cycle at the high score display phase (CDLADR).
+func _return_to_attract() -> void:
+	_begin_attract_hiscore()
 
-## Begin wave select: build available wave list, start timer.
+
+# --- Wave Select (CINIRAT/CREQRAT) ---
+# See GAME_STATE_FLOW.md § CINIRAT/CREQRAT, UI.md § Skill Level Select.
+# Uses LevelData.LEVEL_TABLE (28 entries) gated by HIRATE.
+# 5-column scrolling layout per RQRDSP with LEFSID/RITSID window.
+var select_lefsid: int = 0  # Left edge of visible 5-column window (LEFSID)
+
+## Begin wave select: compute HIRATE from HIWAVE, start 10-second timer.
+## See ALWELG.MAC § INIRA0.
 func _begin_wave_select() -> void:
 	attract_mode = false
 	score = 0
 	lives = INITIAL_LIVES
 	next_bonus_idx = 0
 
-	# Build available starting waves: 1, then every wave the player has reached
-	# Simplified: offer waves 1 through hi_wave, capped at 16 options
-	select_waves = []
-	for w in range(1, mini(hi_wave + 1, 17)):
-		select_waves.append(w)
-	select_cursor = 0
-	select_timer = SELECT_TIMEOUT
-	select_second_timer = SECOND
+	# Compute HIRATE — max index into LEVEL_TABLE based on highest wave reached.
+	# Walk backward from end of table until we find a wave ≤ hi_wave.
+	# See INIRA0: LDX I,LEVELE-LEVEL; DEX; CMP X,LEVEL; CSEND
+	hirate = 0
+	for i in range(LevelData.LEVEL_TABLE.size() - 1, -1, -1):
+		if LevelData.LEVEL_TABLE[i] <= hi_wave:
+			hirate = i
+			break
 
-	hud.show_wave_select(select_waves, select_cursor, 10)
+	# Cap at minimum of 4 if player hasn't unlocked more (default HIRATE per INIRA0)
+	hirate = maxi(hirate, 4)
+
+	select_cursor = 0
+	select_lefsid = 0  # Start at leftmost position
+	select_timer_seconds = SELECT_TIMEOUT  # 10 seconds
+	select_timer_ticks = SECOND  # 1-second sub-timer
+
+	_update_wave_select_display()
 	state = State.CREQRAT
 
 
-## CREQRAT — Wave select. Spinner moves cursor, fire confirms. 10-second timeout.
+## Update the scrolling window for wave select. See RQRDSP scroll logic.
+## Cursor at edge of visible window triggers scroll.
+func _update_wave_select_window() -> void:
+	var ritsid: int = select_lefsid + 4  # Right edge = left + 4 (5 columns)
+	# If cursor at left edge, try scroll left
+	if select_cursor <= select_lefsid and select_lefsid > 0:
+		select_lefsid -= 1
+	# If cursor at right edge, try scroll right
+	elif select_cursor >= ritsid and ritsid < hirate:
+		select_lefsid += 1
+
+
+func _update_wave_select_display() -> void:
+	_update_wave_select_window()
+	hud.show_wave_select(select_cursor, hirate, select_timer_seconds, qframe, select_lefsid)
+	state = State.CREQRAT
+
+
+## CREQRAT — Process wave selection. See ALWELG.MAC § PRORAT.
+## Spinner moves cursor through LEVEL_TABLE[0..hirate], fire confirms.
+## 10-second countdown with 3-second warning sound.
 func _state_wave_select() -> void:
-	# Timer countdown (ticks → seconds display)
-	select_timer -= 1
-	select_second_timer -= 1
-	if select_second_timer <= 0:
-		select_second_timer = SECOND
+	# Timer countdown: TIMHIS counts ticks, QTMPAUS counts seconds
+	select_timer_ticks -= 1
+	if select_timer_ticks <= 0:
+		select_timer_ticks = SECOND
+		select_timer_seconds -= 1
+		# TODO: Play S3SWAR warning sound at 3 seconds
+		if select_timer_seconds < 0:
+			# Time's up — auto-select current position (simulate fire press)
+			_confirm_wave_select()
+			return
 
-	@warning_ignore("integer_division")
-	var seconds_left: int = select_timer / SECOND
-
-	# Spinner moves cursor through available waves
-	if _spinner_delta > 0 and select_cursor < select_waves.size() - 1:
+	# Spinner moves cursor through available levels
+	if _spinner_delta > 0 and select_cursor < hirate:
 		select_cursor += 1
 	elif _spinner_delta < 0 and select_cursor > 0:
 		select_cursor -= 1
 
-	# Fire or superzapper confirms selection
-	if _fire_pressed or _zap_pressed:
+	# Fire or superzapper confirms selection. Start buttons accepted after 2 seconds.
+	var accept_input: bool = _fire_pressed or _zap_pressed
+	if not accept_input and select_timer_seconds < 8:
+		# After 2 seconds (timer < 8), start button also accepted
+		if Input.is_action_just_pressed("start"):
+			accept_input = true
+
+	if accept_input:
 		_fire_pressed = false
 		_zap_pressed = false
 		_confirm_wave_select()
 		return
 
-	# Timeout: auto-select current cursor position
-	if select_timer <= 0:
-		_confirm_wave_select()
-		return
-
 	_fire_pressed = false
 	_zap_pressed = false
-	hud.show_wave_select(select_waves, select_cursor, seconds_left)
+	_update_wave_select_display()
 
 
+## Confirm wave selection and start game. See ALWELG.MAC § PRORAT exit path.
 func _confirm_wave_select() -> void:
-	current_wave = select_waves[select_cursor]
+	current_wave = LevelData.LEVEL_TABLE[select_cursor]
 	hud.set_message("")
 	hud.show_gameplay()
 	_start_wave(current_wave)
@@ -753,12 +857,12 @@ func _confirm_wave_select() -> void:
 
 # --- High Score System ---
 
-## Initialize default high score table.
+## Initialize default high score table. 8 entries (NHISCO = 8).
 func _init_high_scores() -> void:
 	high_scores.clear()
 	# Default entries: descending scores with placeholder initials
-	var default_scores: Array[int] = [10000, 9000, 8000, 7000, 6000, 5000, 4000, 3000, 2000, 1000]
-	var default_initials: Array[String] = ["DRJ", "RSM", "LED", "GDB", "DVL", "MJP", "ZZZ", "AAA", "TST", "---"]
+	var default_scores: Array[int] = [10000, 9000, 8000, 7000, 6000, 5000, 4000, 3000]
+	var default_initials: Array[String] = ["DRJ", "RSM", "LED", "GDB", "DVL", "MJP", "ZZZ", "AAA"]
 	for i in NHISCO:
 		high_scores.append({"score": default_scores[i], "initials": default_initials[i]})
 
@@ -842,10 +946,11 @@ func _finish_initials() -> void:
 	state = State.CDLADR
 
 
-## CDLADR — Display high score ladder, then return to attract.
+## CDLADR — Display high score ladder after game over, then return to attract.
+## (Attract mode ladder display is handled by _state_attract_ladder above.)
 func _state_ladder() -> void:
 	ladder_timer -= 1
-	# Start button during ladder → wave select
+	# Start button during ladder → new game
 	if _fire_pressed or _zap_pressed:
 		_fire_pressed = false
 		_zap_pressed = false

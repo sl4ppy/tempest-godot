@@ -72,6 +72,20 @@ Two rendering systems from the original hardware, both in `vector_shapes.gd`:
 
 **WARNING**: The ENER11-14 (flipper) and ENER21-24 (pulsar) shapes in `ALVROM.MAC` are from an **unused Space Game mode** (`SPACG=0`, conditionally compiled out). Do NOT use them. The actual shipped shapes are ONELIN data in `ALDISP.MAC`.
 
+### UI Screens (hud.gd)
+
+All UI screens implemented from actual 6502 assembly source (ALSCO2.MAC, ALLANG.MAC, ALVROM.MAC):
+
+**BOXPRO/LOGPRO** (Logo sequence): SCARNG routine draws shape at multiple depths from NEARY to FARY (step 2). Scale: `binary=INDEX>>5, linear=(INDEX<<2)&0x7F`. Color: leading=WHITE, trailing=`(INDEX>>3)&7` with 7→RED. BOXPRO uses VORBOX (rectangle), LOGPRO uses VORLIT (TEMPEST text).
+
+**LDRDSP** (High scores): "HIGH SCORES" RED scale 0 Y=0x38. 8 entries in BLULET at X=-48, Y from 40 to -30 (step -10). Format: rank.dot space initials space score.
+
+**GETDSP** (Initials entry): "PLAYER X" at Y=0xC0, "ENTER YOUR INITIALS" RED, "SPIN KNOB" TURQOI, "PRESS FIRE" YELLOW. Falls into LDROUT for score table.
+
+**RQRDSP** (Wave select): 5-column scrolling display. XPOTAB X-positions: -66,-29,9,48,88. LEFSID/RITSID window tracking. LEVEL table (28 entries) gated by HIRATE.
+
+VG coordinate mapping: `screen_y = 512 - vg_y * multiplier` where multiplier=2 for scale 0, 1 for scale 1.
+
 ### Collision System
 
 Line-based, not bounding-box. Entities share a lane (0-15). Collision checks Y-depth proximity:

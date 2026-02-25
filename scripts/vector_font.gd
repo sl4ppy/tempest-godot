@@ -167,6 +167,15 @@ func _build_chars() -> void:
 	CHARS["-"] = [
 		[0, 12, false], [16, 0, true], [8, -12, false],
 	]
+	CHARS["."] = [
+		[4, 0, false], [4, 0, true], [0, 4, true], [-4, 0, true], [0, -4, true], [20, 0, false],
+	]
+	CHARS["("] = [
+		[8, 0, false], [-4, 8, true], [0, 8, true], [4, 8, true], [16, -24, false],
+	]
+	CHARS[")"] = [
+		[8, 0, false], [4, 8, true], [0, 8, true], [-4, 8, true], [16, -24, false],
+	]
 
 
 ## Draw a string of text using vector beam lines.
