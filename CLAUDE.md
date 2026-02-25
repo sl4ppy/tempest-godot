@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Faithful recreation of Atari's 1981 Tempest arcade game in Godot 4 (GDScript). This is a **behavioral recreation** — we implement the documented game logic directly, not a hardware emulator.
 
+## Rules
+- Never guess or assume on implementation.  When implementing any aspect, system, screen, flow, or element of this project, review both the documentation provided and also review the original source code.  All implementation must match the original game as closely as possible in every aspect.
+
 ## Reference Documentation
 
 The original reverse-engineered documentation is available as a git submodule at `docs/tempest-reference/` (from https://github.com/sl4ppy/tempest-main). Key docs:
@@ -41,6 +44,7 @@ shaders/         # CRT phosphor glow shader
 - **CRT aesthetic**: All vectors drawn to SubViewport, post-processed with phosphor glow shader (bloom + persistence).
 - **Perspective-correct depth**: Entity screen positions use inverse-depth mapping (`depth_to_frac()`) rather than linear lerp, matching the 1/y projection behavior.
 - **Attract mode AI**: `AUTOCU` greedy nearest-enemy targeting with POLDEL shortest-path polar distance. Replaces human input during demo.
+- **Attract mode cycle**: CDLADR (high scores, ~1s) → CLOGO (BOXPRO/LOGPRO animation + 3s hold) → demo gameplay (ends on wave clear per NEWAV2, or player death) → repeat.
 - **Inter-level drop**: `CDROP` state — player descends through well with acceleration `(20 + min(wave, 30)) / 256` per frame, can fire at spikes.
 
 ### Projection Formula
@@ -78,13 +82,28 @@ All UI screens implemented from actual 6502 assembly source (ALSCO2.MAC, ALLANG.
 
 **BOXPRO/LOGPRO** (Logo sequence): SCARNG routine draws shape at multiple depths from NEARY to FARY (step 2). Scale: `binary=INDEX>>5, linear=(INDEX<<2)&0x7F`. Color: leading=WHITE, trailing=`(INDEX>>3)&7` with 7→RED. BOXPRO uses VORBOX (rectangle), LOGPRO uses VORLIT (TEMPEST text).
 
-**LDRDSP** (High scores): "HIGH SCORES" RED scale 0 Y=0x38. 8 entries in BLULET at X=-48, Y from 40 to -30 (step -10). Format: rank.dot space initials space score.
+**LDRDSP** (High scores): Full screen with three sections:
+- **INFO** (top): P1 score GREEN top-left, high score + #1 initials GREEN center (SCORES template in ALVROM.MAC, no text label). INSERT COINS RED flashing (QFRAME & 0x1F < 0x10).
+- **LDROUT** (middle): "HIGH SCORES" RED scale 0 Y=0x38. 8 entries BLULET at X=-48, Y from 40 to -30 (decimal step -10). Format: rank.dot space initials space score.
+- **DSPCRD** (bottom): "© MCMLXXX ATARI" BLULET Y=0x92, "BONUS EVERY 20000" TURQOI Y=0x89, "CREDITS 0" + "1 COIN 1 PLAY" GREEN Y=0x80.
 
 **GETDSP** (Initials entry): "PLAYER X" at Y=0xC0, "ENTER YOUR INITIALS" RED, "SPIN KNOB" TURQOI, "PRESS FIRE" YELLOW. Falls into LDROUT for score table.
 
 **RQRDSP** (Wave select): 5-column scrolling display. XPOTAB X-positions: -66,-29,9,48,88. LEFSID/RITSID window tracking. LEVEL table (28 entries) gated by HIRATE.
 
-VG coordinate mapping: `screen_y = 512 - vg_y * multiplier` where multiplier=2 for scale 0, 1 for scale 1.
+### VG Coordinate Mapping
+
+Two mapping systems for positioning UI text:
+
+**MSGS/VGVTR1** — Used by MESS table messages (ALLANG.MAC):
+- MESS Y values are hex bytes (assembler default radix). Values ≥ 0x80 are negative signed bytes.
+- VGVTR1 (ALVGUT.MAC) multiplies signed byte by 4 via two ASL operations.
+- Mapping: `screen_y = 512 - signed_val * 4.0 * VG_SCALE` where `VG_SCALE = 0.82` accounts for analog CRT deflection vs pixel viewport.
+- Example: Y=0x92 → signed -110 → ×4 = -440 → ×0.82 = -360.8 → screen Y = 872.8
+
+**Direct VCTR** — Used by SCORES template (ALVROM.MAC):
+- Raw VG coordinates, not multiplied. Positioned via VCTR macro from CNTR origin.
+- Only used for the persistent score/lives overlay (INFO section).
 
 ### Collision System
 

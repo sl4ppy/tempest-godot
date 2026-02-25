@@ -5,8 +5,8 @@ extends Node2D
 const NUM_LINES: int = 16
 
 # Screen space configuration
-var screen_center := Vector2(512, 540)
-var screen_scale: float = 150.0
+var screen_center := Vector2(384, 540)
+var screen_scale: float = 88.0
 
 # Camera / eye position (set per well shape from HOLEYL/HOLEZL tables)
 var eye := Vector3(0x80, 0x10, 0x80)  # EXL, EYL, EZL

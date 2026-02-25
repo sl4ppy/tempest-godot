@@ -47,15 +47,15 @@ var logo_phase: int = 0  # 0=BOXPRO (shrinking box), 1=LOGPRO (approaching logo)
 var logo_fary: int = 0x19   # Far depth (increases in BOXPRO, decreases in LOGPRO)
 var logo_neary: int = 0x18  # Near depth (increases in BOXPRO, decreases in LOGPRO)
 
-# INSERT COIN flash state
+# INSERT COINS flash state
 var show_insert_coin: bool = true
 var has_credits: bool = false
 
 # --- Coordinate mapping ---
 # VG coordinate system: center-origin, Y-up, range ~ ±500 at binary scale 1.
-# Our viewport: 1024x1024, (0,0) top-left.
+# Our viewport: 768x1024 (3:4 portrait), (0,0) top-left.
 # Binary scale 0 = 2x size, scale 1 = 1x, scale 2 = 0.5x.
-const SCREEN_CX: float = 512.0
+const SCREEN_CX: float = 384.0
 const SCREEN_CY: float = 512.0
 
 # Scale factors for text: binary scale 0 = big, 1 = normal
@@ -74,6 +74,23 @@ func _vg_y(vg_y: int, binary_scale: int = 1) -> float:
 func _vg_x(vg_x: int, binary_scale: int = 1) -> float:
 	var multiplier: float = 2.0 if binary_scale == 0 else 1.0
 	return SCREEN_CX + float(vg_x) * multiplier
+
+## Map a MESS table Y byte to screen Y. See ALSCO2.MAC § MSGS, ALVGUT.MAC § VGVTR1.
+## MSGS positions text at VG binary scale 1 via VGVTR1 which multiplies the signed
+## byte by 4 to get VG displacement from center. The 0.82 factor accounts for the
+## analog vector monitor's deflection characteristics vs our pixel viewport.
+const VG_SCALE: float = 0.82
+func _msgs_y(mess_byte: int) -> float:
+	var signed_val: int = mess_byte if mess_byte < 0x80 else mess_byte - 0x100
+	return SCREEN_CY - float(signed_val) * 4.0 * VG_SCALE
+
+## Map a raw signed VG Y value (e.g., LDROUT TEMP3 in decimal) through VGVTR1.
+func _vgvtr1_y(signed_val: int) -> float:
+	return SCREEN_CY - float(signed_val) * 4.0 * VG_SCALE
+
+## Map a MESS table X byte (signed) through VGVTR1 to screen X.
+func _vgvtr1_x(signed_val: int) -> float:
+	return SCREEN_CX + float(signed_val) * 4.0 * VG_SCALE
 
 
 func _draw() -> void:
@@ -103,7 +120,7 @@ func _draw_gameplay() -> void:
 	VectorFont.draw_text_centered(self, str(high_score), Vector2(SCREEN_CX, 30), green, SCALE_1, LW_1)
 
 	# Lives — top right (displayed as count)
-	VectorFont.draw_text_right(self, str(lives), Vector2(1000, 30), yellow, SCALE_1, LW_1)
+	VectorFont.draw_text_right(self, str(lives), Vector2(748, 30), yellow, SCALE_1, LW_1)
 
 	# Wave — bottom center
 	VectorFont.draw_text_centered(self, "WAVE " + str(wave), Vector2(SCREEN_CX, 990), green, SCALE_1, LW_1)
@@ -126,7 +143,7 @@ func _draw_wave_select() -> void:
 	var blulet: Color = Colors.get_color(Colors.BLULET)
 
 	# Atari copyright at Y=0x60=96 (MSGEN3 with A=0x60). See RQRDSP.
-	VectorFont.draw_text_centered(self, "MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(0x60)), blulet, SCALE_1, LW_1)
+	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(0x60)), blulet, SCALE_1, LW_1)
 
 	# "PLAYER 1" — drawn by DPLRNO
 	VectorFont.draw_text_centered(self, "PLAYER " + str(entry_player), Vector2(SCREEN_CX, _vg_y(0x1A, 0)), white, SCALE_0, LW_0)
@@ -203,63 +220,115 @@ func _draw_wave_select() -> void:
 	if select_timer >= 0:
 		VectorFont.draw_text(self, str(select_timer), Vector2(SCREEN_CX + 30, _vg_y(-110)), green, SCALE_1, LW_1)
 
-	# INSERT COIN / PRESS START at bottom
+	# INSERT COINS / PRESS START at bottom
 	_draw_coin_prompt()
 
 
 ## CDHITB — High score table ("Ladder"). See ALSCO2.MAC § LDRDSP/LDROUT.
-## "HIGH SCORES" in RED at scale 0 (big), Y=0x38=56.
-## 8 rows: rank.initials.score in BLULET (or WHITE for glowing entry).
-## Rows positioned at X=-48 from center, Y from 40 to -30 (step -10) at scale 1.
-## Atari copyright at bottom via MATARI message.
+## LDRDSP calls INFO first (score/lives/insert coins), then LDROUT (table).
+## LDROUT: MHIGHS at Y=0x38 scale 0, entries at TEMP3=40 to -30 (step -10),
+## X=0xD0(-48 signed). DSPCRD draws copyright, bonus interval, credits, coin mode.
+##
+## MESS table Y values are HEX bytes (assembler default radix) passed through
+## VGVTR1 which multiplies by 4. Values ≥ 0x80 are negative signed bytes.
+## ALLANG.MAC message definitions:
+##   MHIGHS: RED, scale 0, Y=0x38 (+56, VGVTR1→+224)
+##   MINSER: RED, scale 1, Y=0x56 (+86, VGVTR1→+344)
+##   MATARI: BLULET, scale 1, Y=0x92 (-110 signed, VGVTR1→-440)
+##   MBOLIF: TURQOI, scale 1, Y=0x89 (-119 signed, VGVTR1→-476)
+##   MCREDI: GREEN, scale 1, Y=0x80 (-128 signed, VGVTR1→-512)
+##   MCMOD2: GREEN, scale 1, Y=0x80 (-128 signed, VGVTR1→-512)
 func _draw_high_scores() -> void:
 	var red: Color = Colors.get_color(Colors.RED)
+	var green: Color = Colors.get_color(Colors.GREEN)
 	var blulet: Color = Colors.get_color(Colors.BLULET)
 	var white: Color = Colors.get_color(Colors.WHITE)
+	var turqoi: Color = Colors.get_color(Colors.TURQOI)
 
-	# "HIGH SCORES" — RED, binary scale 0 (big), Y=0x38=56
-	# MSGS draws centered text at scale 0
-	VectorFont.draw_text_centered(self, "HIGH SCORES", Vector2(SCREEN_CX, _vg_y(0x38, 0)), red, SCALE_0, LW_0)
+	# --- INFO section (top of screen) ---
+	# See ALSCO2.MAC § INFO: displays score/lives in attract mode, flashing INSERT COINS.
+	# In attract mode, INFO shows: high score + #1 initials at top, player score at left.
+
+	# High score + #1 initials — GREEN, scale 1, top area
+	# SCORES template (ALVROM.MAC): CSTAT GREEN, positioned via VCTR -30,30 from lives.
+	# VG offset dy=+364 from center → screen Y ≈ 148. High score at VG Y ≈ +396 → screen Y ≈ 116.
+	# No "HIGH SCORE" text label — just raw digits + initials (INFO doesn't call MHIGHS).
+	if score_table.size() > 0:
+		var hs_entry: Dictionary = score_table[0]
+		var hs_text: String = str(hs_entry.score) + " " + hs_entry.initials
+		VectorFont.draw_text_centered(self, hs_text, Vector2(SCREEN_CX, 50), green, SCALE_1, LW_1)
+
+	# Player 1 score — GREEN, top-left (same position as gameplay HUD)
+	# SCORES template: VCTR -1C0,16C from center → screen X≈64, Y≈148
+	VectorFont.draw_text(self, str(score), Vector2(20, 30), green, SCALE_1, LW_1)
+
+	# INSERT COINS / PRESS START — RED, scale 1, Y=0x56 (centered, flashing)
+	# MINSER: RED, scale 1, Y=0x56. Flash: QFRAME & 0x1F < 0x10.
+	# If message is set (e.g., "PRESS START"), it replaces INSERT COINS at the same Y.
+	if message == "" and show_insert_coin:
+		VectorFont.draw_text_centered(self, "INSERT COINS", Vector2(SCREEN_CX, _msgs_y(0x56)), red, SCALE_1, LW_1)
+
+	# --- LDROUT: High score table ---
+
+	# "HIGH SCORES" — RED, binary scale 0 (big), Y=0x38
+	# MSGS positions at scale 1 via VGVTR1, then renders text at scale 0 (2x size).
+	VectorFont.draw_text_centered(self, "HIGH SCORES", Vector2(SCREEN_CX, _msgs_y(0x38)), red, SCALE_0, LW_0)
 
 	# Score entries — LDROUT loop: 8 entries (NHISCO)
 	# VGCNTR + VGVTR1(A=0xD0=-48signed, X=TEMP3)
-	# TEMP3 starts at 40, decrements by 10 per row
+	# TEMP3 starts at 40. (decimal), decrements by 10. per row → 40,30,20,10,0,-10,-20,-30
+	# X position: 0xD0 = -48 signed → VGVTR1: -48*4 = -192 VG units from center
 	# Colors: BLULET default, WHITE for glowing entry (SZL match)
-	# Format: rank. [space] initials [space] score
-	var temp3: int = 40
-	for i in range(score_table.size() - 1, -1, -1):
+	# Format: rank dot space initials space score (via DIGTYS, VGDOT, OUTINI)
+	var temp3: int = 40  # Decimal, per LDROUT: "LDA I,40."
+	var row_x_base: float = _vgvtr1_x(-48)  # X=0xD0 = -48 signed
+
+	for i in range(score_table.size()):
 		var entry: Dictionary = score_table[i]
 		var row_color: Color = white if (i == highlight_idx) else blulet
-		var row_y: float = _vg_y(temp3)
-		# X = -48 from center at scale 1
-		var row_x: float = _vg_x(-48)
+		var row_y: float = _vgvtr1_y(temp3)
 
-		var rank_str: String = str(i + 1) + "."
+		var rank_str: String = str(i + 1)
 		var ini: String = entry.initials if entry.initials.strip_edges() != "" else "   "
-		var sc_str: String = str(entry.score).pad_zeros(6) if entry.score > 0 else "     0"
+		var sc_str: String = str(entry.score) if entry.score > 0 else "0"
 
-		# Draw: rank, space, initials, space, score
-		var x_cursor: float = row_x
+		# Draw: rank, dot, space, initials, space(s), score
+		var x_cursor: float = row_x_base
 		x_cursor += VectorFont.draw_text(self, rank_str, Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
-		x_cursor += VectorFont.draw_text(self, " ", Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
+		# VGDOT — period after rank
+		x_cursor += VectorFont.draw_text(self, ".", Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
+		# VGVTR1 space (8 VG units advance) — about half a character width
+		x_cursor += VectorFont.measure_text(" ", SCALE_1) * 0.5
+		# OUTINI — 3 initials
 		x_cursor += VectorFont.draw_text(self, ini, Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
-		x_cursor += VectorFont.draw_text(self, " ", Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
+		# VGVTR1 space (8 VG units advance)
+		x_cursor += VectorFont.measure_text("  ", SCALE_1)
+		# DIGTYS — score digits
 		VectorFont.draw_text(self, sc_str, Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
 
-		temp3 -= 10
+		temp3 -= 10  # "SBC I,10." — decimal 10
 
-	# Atari copyright — BLULET, scale 1, Y=0x92=146
-	VectorFont.draw_text_centered(self, "MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(0x92)), blulet, SCALE_1, LW_1)
+	# --- DSPCRD: Bottom info section ---
+	# Called by INFO. Draws coin mode, bonus interval, copyright, credits.
 
-	# Credits — GREEN, scale 1, Y=0x80=128
-	VectorFont.draw_text_centered(self, "CREDITS 0", Vector2(SCREEN_CX, _vg_y(0x80)), Colors.get_color(Colors.GREEN), SCALE_1, LW_1)
+	# MATARI — "© MCMLXXX ATARI", BLULET, scale 1, Y=0x92
+	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _msgs_y(0x92)), blulet, SCALE_1, LW_1)
 
-	# INSERT COIN / PRESS START
-	_draw_coin_prompt()
+	# BOLOUT — "BONUS EVERY  20000", TURQOI, scale 1, Y=0x89
+	# MBOLIF message + DIGTYS for the bonus threshold value.
+	# Original shows this when BLIFIN is set (bonus life enabled).
+	VectorFont.draw_text_centered(self, "BONUS EVERY  20000", Vector2(SCREEN_CX, _msgs_y(0x89)), turqoi, SCALE_1, LW_1)
 
-	# Optional message (e.g., "PRESS START" after game over)
+	# MCREDI — "CREDITS  0", GREEN, scale 1, Y=0x80 (left-aligned)
+	# MCMOD2 — "1 COIN 1 PLAY", GREEN, scale 1, Y=0x80 (right side)
+	# These share the same Y line. MCREDI is drawn first (left), then MCMOD2 (right).
+	var credits_y: float = _msgs_y(0x80)
+	VectorFont.draw_text(self, "CREDITS  0", Vector2(70, credits_y), green, SCALE_1, LW_1)
+	VectorFont.draw_text_right(self, "1 COIN 1 PLAY", Vector2(700, credits_y), green, SCALE_1, LW_1)
+
+	# Optional message overlay (e.g., "PRESS START" after game over)
 	if message != "":
-		VectorFont.draw_text_centered(self, message, Vector2(SCREEN_CX, _vg_y(0x56)), red, SCALE_1, LW_1)
+		VectorFont.draw_text_centered(self, message, Vector2(SCREEN_CX, _msgs_y(0x56)), red, SCALE_1, LW_1)
 
 
 ## CDGETI — "Enter Your Initials" screen. See ALSCO2.MAC § GETDSP.
@@ -306,12 +375,12 @@ func _draw_initials_entry() -> void:
 	VectorFont.draw_text_centered(self, "PRESS FIRE TO SELECT", Vector2(SCREEN_CX, _vg_y(-20)), yellow, SCALE_1, LW_1)
 
 	# Atari copyright — BLULET, scale 1
-	VectorFont.draw_text_centered(self, "MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(0x92)), blulet, SCALE_1, LW_1)
+	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(0x92)), blulet, SCALE_1, LW_1)
 
 	# High score table below (GETDSP falls into LDROUT)
 	# Draw compact version of the ladder with the new entry glowing
 	var temp3: int = -35
-	for i in range(score_table.size() - 1, -1, -1):
+	for i in range(score_table.size()):
 		var entry: Dictionary = score_table[i]
 		var row_color: Color = white if (i == highlight_idx) else blulet
 		var row_y: float = _vg_y(temp3)
@@ -319,7 +388,8 @@ func _draw_initials_entry() -> void:
 
 		var rank_str: String = str(i + 1) + "."
 		var ini: String = entry.initials if entry.initials.strip_edges() != "" else "   "
-		var sc_str: String = str(entry.score).pad_zeros(6) if entry.score > 0 else "     0"
+		# Zero-suppressed score display per original NWHEXZ routine
+		var sc_str: String = str(entry.score) if entry.score > 0 else "0"
 
 		var x_cursor: float = row_x
 		x_cursor += VectorFont.draw_text(self, rank_str, Vector2(x_cursor, row_y), row_color, SCALE_1 * 0.8, LW_1)
@@ -344,12 +414,11 @@ func _draw_logo() -> void:
 	else:
 		_draw_scarng_logo()
 
-	# Atari copyright — always shown during logo. See SCARNG: MSGEN3 at Y=0xD0
+	# Atari copyright — always shown during logo. See SCARNG: MSGEN3 at Y=0xD0 (-48 signed)
+	# Original displays "© MCMLXXX ATARI" via MATARI message in ALLANG.MAC.
+	# SCARNG does NOT call INFO, so no INSERT COINS during logo phase.
 	var blulet: Color = Colors.get_color(Colors.BLULET)
-	VectorFont.draw_text_centered(self, "MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(-100)), blulet, SCALE_1, LW_1)
-
-	# INSERT COIN / PRESS START
-	_draw_coin_prompt()
+	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(-48)), blulet, SCALE_1, LW_1)
 
 
 ## SCARNG for VORBOX — Draw rainbow trail of screen boundary rectangle.
@@ -358,13 +427,13 @@ func _draw_logo() -> void:
 ##   scale_factor = 2^(-INDEX>>5) * (128 - (INDEX<<2)&0x7F) / 128
 ##   color: leading = WHITE, trailing = (INDEX>>3)&7 with 7→RED
 func _draw_scarng_box() -> void:
-	var center: Vector2 = Vector2(SCREEN_CX, SCREEN_CY - 40)
-	# Base rectangle size (VORBOX: ±500 x ±540 in VG units at scale 1)
-	var base_w: float = 480.0
-	var base_h: float = 480.0
+	var center: Vector2 = Vector2(SCREEN_CX, SCREEN_CY)  # VG CNTR = screen center
+	# Base rectangle half-size (VORBOX: ±500 x ±540 in VG units at scale 1)
+	var base_w: float = 500.0
+	var base_h: float = 540.0
 
 	var idx: int = logo_neary
-	while idx <= logo_fary:
+	while idx < logo_fary:
 		var sf: float = _scarng_scale(idx)
 		var color: Color = _scarng_color(idx, logo_neary)
 		var hw: float = base_w * sf
@@ -380,37 +449,109 @@ func _draw_scarng_box() -> void:
 ## VORLIT letters: T E M P E S T, drawn at multiple depths.
 ## Each depth uses same scale/color logic as SCARNG box.
 func _draw_scarng_logo() -> void:
-	var center: Vector2 = Vector2(SCREEN_CX, SCREEN_CY - 60)
+	var center: Vector2 = Vector2(SCREEN_CX, SCREEN_CY)  # VG CNTR = screen center
 
 	var idx: int = logo_neary
-	while idx <= logo_fary:
+	while idx < logo_fary:
 		var sf: float = _scarng_scale(idx)
 		var color: Color = _scarng_color(idx, logo_neary)
 		_draw_tempest_text(center, sf, color)
 		idx += 2
 
 
-## Draw the word "TEMPEST" using the original VORLIT vector shape data.
-## See ALVROM.MAC: VORLIT starts at (-432, 256) then draws T,E,M,P,E,S,T
-## with specific inter-letter offsets. We simplify to VectorFont at the
-## computed scale, which gives the correct visual result.
-func _draw_tempest_text(center: Vector2, sf: float, color: Color) -> void:
-	var text_scale: float = sf * 5.0  # Scale so it fills screen at sf=1.0
-	if text_scale < 0.05:
-		return  # Too small to draw
-	var lw: float = clampf(text_scale * 2.0, 0.5, 3.0)
-	VectorFont.draw_text_centered(self, "TEMPEST", center, color, text_scale, lw)
+## Draw the stylized "TEMPEST" logo using exact VORLIT vector shape data.
+## Traced from ALVROM.MAC: VORLIT/TEMLIT subroutine with T,E,M,P,E,S,T letters.
+## Each entry: [dx, dy, draw] in VG units (hex→decimal). Y-up in VG, negated for Godot.
+## Shape bounding box: X[-512, 534], Y[256, 384]. Center: (11, 320).
+const VORLIT_STROKES: Array = [
+	# Initial position from CNTR origin — VCTR -1B0,100,0
+	[-432, 256, false],
+	# === T (first) ===
+	[0, 128, true],        # vertical stem up
+	[-80, 0, false],       # position crossbar left
+	[160, 0, true],        # crossbar right
+	# T→E spacing
+	[96, 0, false],
+	# === E (first) ===
+	[-80, 0, true],        # top horizontal left
+	[-20, -64, true],      # diagonal to middle
+	[112, 0, true],        # middle horizontal right
+	[-112, 0, false],      # back left (invisible)
+	[-20, -64, true],      # diagonal to bottom
+	[132, 0, true],        # bottom horizontal right
+	# E→M spacing
+	[36, 0, false],
+	# === M ===
+	[-32, 0, true],        # left serif
+	[48, 128, true],       # left diagonal up
+	[16, 0, true],         # left peak top
+	[32, -88, true],       # inner diagonal down
+	[32, 88, true],        # inner diagonal up
+	[16, 0, true],         # right peak top
+	[48, -128, true],      # right diagonal down
+	[-32, 0, true],        # right serif
+	# M→P spacing
+	[52, 0, false],
+	# === P ===
+	[-16, 0, true],        # serif
+	[0, 128, true],        # vertical stem up
+	[92, 0, true],         # top horizontal right
+	[26, -72, true],       # bowl right side
+	[-118, 0, true],       # bowl bottom left
+	# P→E2 spacing — VCTR 0F8,48,0
+	[248, 72, false],
+	# === E (second) ===
+	[-80, 0, true],
+	[-20, -64, true],
+	[112, 0, true],
+	[-112, 0, false],
+	[-20, -64, true],
+	[132, 0, true],
+	# E2→S spacing
+	[22, 40, false],
+	# === S ===
+	[-16, -40, true],      # initial diagonal
+	[144, 0, true],        # bottom horizontal
+	[0, 56, true],         # right vertical up
+	[-112, 32, true],      # middle diagonal left-up
+	[16, 40, true],        # upper diagonal right-up
+	[100, 0, true],        # top horizontal right
+	[-12, -32, true],      # ending diagonal
+	# S→T2 spacing
+	[96, -96, false],
+	# === T (final) — JMPL T ===
+	[0, 128, true],
+	[-80, 0, false],
+	[160, 0, true],
+]
+func _draw_tempest_text(cntr: Vector2, sf: float, color: Color) -> void:
+	if sf < 0.001:
+		return
+	var lw: float = clampf(sf * 3.0, 0.5, 3.0)
+	# Beam starts at CNTR position (screen center). The shape's own VCTR moves
+	# handle all positioning — SCARNG SCAL applies to everything including the
+	# initial (-432, +256) offset from center. See ALVROM.MAC VORLIT.
+	var beam: Vector2 = cntr
+	for stroke in VORLIT_STROKES:
+		var dx: float = float(stroke[0]) * sf
+		var dy: float = float(stroke[1]) * sf
+		var new_beam: Vector2 = beam + Vector2(dx, -dy)  # Negate Y for Godot
+		if stroke[2]:
+			draw_line(beam, new_beam, color, lw)
+		beam = new_beam
 
 
 ## SCARNG scale computation. See ALSCO2.MAC § SCARNG.
-## binary_scale = INDEX >> 5, linear_scale = (INDEX << 2) & 0x7F
-## Total: 2^(-binary) * (128 - linear) / 128
+## Original VG hardware: binary = INDEX>>5, linear = (INDEX<<2)&0x7F.
+## VGSCAL sets AVG SCAL instruction: binary determines power-of-2 base size,
+## linear interpolates within each binary step (128=full, 0=nearly zero).
+## The 2x base multiplier matches our _vg_y mapping (binary_scale 0 = 2 pixels/unit).
+## The formula has 16x discontinuities at binary boundaries (every 32 indices)
+## which were masked by analog CRT phosphor persistence on the original hardware.
 func _scarng_scale(idx: int) -> float:
-	@warning_ignore("integer_division")
 	var binary: int = idx >> 5
 	var linear: int = (idx << 2) & 0x7F
-	var scale_val: float = pow(2.0, -float(binary)) * (128.0 - float(linear)) / 128.0
-	return maxf(scale_val, 0.01)
+	return maxf(2.0 * pow(2.0, -binary) * float(128 - linear) / 128.0, 0.0001)
 
 
 ## SCARNG color computation. See ALSCO2.MAC § SCARNG.
@@ -426,17 +567,17 @@ func _scarng_color(idx: int, neary: int) -> Color:
 	return Colors.get_color(color_idx)
 
 
-## INSERT COIN / PRESS START prompt. See UI.md § 1.6.
+## INSERT COINS / PRESS START prompt. See UI.md § 1.6.
 ## Flash logic: QFRAME & 0x1F < 0x10 → visible; else invisible.
 ## 32-frame cycle at 60Hz display rate.
 func _draw_coin_prompt() -> void:
-	var prompt_y: float = _vg_y(-120)
+	var prompt_y: float = _vg_y(0x56)  # MESS INSER/PRESS: Y=0x56, binary_scale=1
 	if has_credits:
 		# Static "PRESS START"
 		VectorFont.draw_text_centered(self, "PRESS START", Vector2(SCREEN_CX, prompt_y), Colors.get_color(Colors.RED), SCALE_1, LW_1)
 	elif show_insert_coin:
-		# Flashing "INSERT COIN"
-		VectorFont.draw_text_centered(self, "INSERT COIN", Vector2(SCREEN_CX, prompt_y), Colors.get_color(Colors.RED), SCALE_1, LW_1)
+		# Flashing "INSERT COINS"
+		VectorFont.draw_text_centered(self, "INSERT COINS", Vector2(SCREEN_CX, prompt_y), Colors.get_color(Colors.RED), SCALE_1, LW_1)
 
 
 # --- Public API ---
@@ -469,16 +610,18 @@ func show_wave_select(cursor: int, max_idx: int, timer: int, qframe: int, lefsid
 	select_qframe = qframe
 	select_lefsid = lefsid
 	entry_player = player
-	# Flash INSERT COIN based on qframe
+	# Flash INSERT COINS based on qframe
 	show_insert_coin = (qframe & 0x1F) < 0x10
 	queue_redraw()
 
 
-func show_high_scores(table: Array[Dictionary], highlight: int = -1, msg: String = "") -> void:
+func show_high_scores(table: Array[Dictionary], highlight: int = -1, msg: String = "", qframe: int = 0) -> void:
 	mode = Mode.HIGH_SCORES
 	score_table = table
 	highlight_idx = highlight
 	message = msg
+	# Flash INSERT COINS based on qframe (32-frame cycle at 60Hz → ~5 ticks at 20Hz)
+	show_insert_coin = (qframe & 0x1F) < 0x10
 	queue_redraw()
 
 
@@ -503,6 +646,6 @@ func show_logo(phase: int, fary: int, neary: int, qframe: int = 0) -> void:
 	logo_phase = phase
 	logo_fary = fary
 	logo_neary = neary
-	# Flash INSERT COIN based on qframe
+	# Flash INSERT COINS based on qframe
 	show_insert_coin = (qframe & 0x1F) < 0x10
 	queue_redraw()

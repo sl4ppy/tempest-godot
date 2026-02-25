@@ -36,7 +36,7 @@ stretch = true
 
 [node name="SubViewport" type="SubViewport" parent="GameViewport"]
 handle_input_locally = false
-size = Vector2i(1024, 1024)
+size = Vector2i(768, 1024)
 render_target_clear_mode = 0
 render_target_update_mode = 4
 
