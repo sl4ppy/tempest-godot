@@ -14,11 +14,17 @@ This is a **behavioral recreation** — we implement the original game logic dir
 
 *Left: LOGPRO rainbow trail — "TEMPEST" text rendered at multiple depths with color cycling (white leading, rainbow trailing), matching the original SCARNG routine from ALSCO2.MAC. Right: Demo gameplay on a square well with enemies, explosions, and player ship.*
 
-| BOXPRO Rainbow | Gameplay 2 |
+| BOXPRO Rainbow | Attract Mode |
 |:---:|:---:|
-| ![BOXPRO shrinking box](images/boxpro.png) | ![Gameplay 2](images/gameplay2.png) |
+| ![BOXPRO shrinking box](images/boxpro.png) | ![Attract mode](images/attract.png) |
 
-*Left: BOXPRO phase — screen boundary rectangle (VORBOX) drawn as a rainbow trail at increasing depths. Right: Active gameplay with spikers, explosions, and the player firing.*
+*Left: BOXPRO phase — screen boundary rectangle (VORBOX) drawn as a rainbow trail at increasing depths. Right: Attract mode LOGPRO — "TEMPEST" text approaching the viewer with copyright notice.*
+
+| Gameplay 2 |
+|:---:|
+| ![Gameplay 2](images/gameplay2.png) |
+
+*Active gameplay with spikers, explosions, and the player firing.*
 
 ## Features
 
@@ -26,7 +32,7 @@ This is a **behavioral recreation** — we implement the original game logic dir
 - **BOXPRO/LOGPRO title sequence** — rainbow trail effect using SCARNG routine: VORBOX rectangle shrinks away, then TEMPEST text approaches with depth-based color cycling (leading=WHITE, trailing cycles through palette)
 - **High score table (LDRDSP)** — 8 entries (NHISCO=8), RED title at scale 0, BLULET entries, exact VG coordinate positioning from assembly
 - **Initials entry (GETDSP)** — "PLAYER X" header, "ENTER YOUR INITIALS", spinner character cycling (A-Z + space), 15-second timeout (ITIMIN)
-- **Wave select (RQRDSP)** — 5-column scrolling display with XPOTAB positions, NOVICE/EXPERT labels, level numbers from LEVEL table, bonus points, 10-second countdown
+- **Wave select (RQRDSP)** — 5-column scrolling display with XPOTAB positions, NOVICE/EXPERT labels, level numbers + hole shapes colored by difficulty band (Blue/Red/Yellow/Cyan/Green/Purple per 16-wave cycle), bonus points, 10-second countdown
 - **INSERT COIN flash** — 32-frame cycle per D2GAME routine (QFRAME & 0x1F)
 - **Attract mode cycle** — High scores → BOXPRO → LOGPRO → Demo gameplay → repeat
 

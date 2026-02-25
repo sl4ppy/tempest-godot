@@ -50,12 +50,16 @@ var death_timer: int = 0
 var death_lane: int = 0  # Lane where player died
 var death_frac: float = 0.0  # Rim fraction at death
 
-# Warp transition (CNEWV2). See PLAYFIELD.md § 5.3.
-const WARP_SPEED: float = 24.0  # EYL += $18 per frame
+# Warp transition (CNEWV2). See ALWELG.MAC § NEWAV2.
+# After CDROP, new well is loaded and camera starts far away. Camera advances
+# at constant velocity toward EYLDES. The 1/dy projection makes the well grow
+# from a tiny spec to full playing size — the iconic "zoom in" effect.
+const WARP_DISTANCE: float = 2000.0  # Starting distance from destination eye.y
+const WARP_SPEED: float = 72.0       # Camera advance per 20Hz tick ($18=24 * 3)
 var warp_timer: int = 0
-var warp_phase: int = 0  # 0=zoom out, 1=zoom in
-var warp_eye_start: float = 0.0
-var warp_zadj_start: float = 0.0
+var warp_eye_start: float = 0.0   # Starting eye.y (far from well)
+var warp_eye_dest: float = 0.0    # Destination eye.y (normal playing position)
+var warp_zadj_dest: float = 0.0   # Destination z_adjust
 
 # Bonus life system. See GAME_STATE_FLOW.md scoring.
 const BONUS_THRESHOLDS: Array[int] = [20000, 60000]
@@ -66,8 +70,12 @@ var bonus_flash_timer: int = 0
 var game_over_timer: int = 0
 
 # Inter-level drop (CDROP). See ENTITIES.md § Inter-Level Drop.
+# Camera tracks the player, maintaining initial camera-to-player distance.
+# This creates the "flying through tube" effect: near rim rushes off-screen
+# while far end approaches, and the player stays at consistent projection scale.
 var drop_velocity: float = 0.0  # 16-bit velocity: accumulates with acceleration
 var drop_y: float = 0x10  # Player depth during drop (starts at rim)
+var drop_eye_start: float = 0.0  # Camera eye.y at start of drop (for tracking offset)
 
 # Wave select (CREQRAT). See GAME_STATE_FLOW.md § CREQRAT.
 # Uses LevelData.LEVEL_TABLE (28 entries) gated by HIRATE.
@@ -99,6 +107,7 @@ const WAVE_BONUS: Array[int] = [0, 60, 160, 320, 540, 740, 940, 1140, 1340]
 @onready var projectiles: Node2D = $GameViewport/SubViewport/Entities/Projectiles
 @onready var enemy_mgr: Node2D = $GameViewport/SubViewport/Entities/InvaderManager
 @onready var enemy_shots: Node2D = $GameViewport/SubViewport/Entities/EnemyShots
+@onready var entities: Node2D = $GameViewport/SubViewport/Entities
 @onready var hud: Node2D = $GameViewport/SubViewport/HUD
 
 # Input state
@@ -134,11 +143,12 @@ func _load_wave_visuals(wave: int) -> void:
 	var shape_data: Dictionary = LevelData.get_well_data(wave)
 	well.load_shape(shape_data)
 	well.well_color = Colors.get_well_color(wave)
-	hud.update_display(score, lives, wave)
+	hud.update_display(score, lives, wave, qframe)
 
 
 ## Full wave init — load shape, reset all entities, begin gameplay.
 func _start_wave(wave: int) -> void:
+	_set_gameplay_visible(true)
 	current_wave = wave
 	# Track highest wave reached for wave select unlock
 	if not attract_mode and wave > hi_wave:
@@ -153,8 +163,11 @@ func _start_wave(wave: int) -> void:
 	projectiles.init_for_wave(well)
 	enemy_mgr.init_for_wave(well, wave_params)
 	enemy_shots.init_for_wave(well, enemy_mgr.get_charge_speed())
-	hud.show_gameplay()
-	hud.update_display(score, lives, wave)
+	if attract_mode:
+		hud.show_gameplay(true, high_scores)
+	else:
+		hud.show_gameplay(false)
+	hud.update_display(score, lives, wave, qframe)
 
 	_calc_collision_distances(wave_params)
 
@@ -234,6 +247,12 @@ func _process(delta: float) -> void:
 		_spinner_delta += int(_mouse_delta)
 		_mouse_delta = 0.0
 
+	# Logo animation at frame rate — original BOXPRO/LOGPRO ran as 60Hz display
+	# states (ALSCO2.MAC), not at 20Hz game tick rate. Running at frame rate
+	# prevents the visible stutter from integer depth jumps at 50ms intervals.
+	if state == State.CLOGO and not logo_converged:
+		_process_logo(delta)
+
 	# Fixed-tick game logic at 20 Hz, render every frame
 	_tick_accumulator += delta
 	while _tick_accumulator >= TICK_RATE:
@@ -287,6 +306,13 @@ func set_state(new_state: State) -> void:
 	state = new_state
 
 
+## Show or hide the well and entity nodes. Non-gameplay screens (high scores,
+## logo, wave select) should hide these so they don't render over the HUD.
+func _set_gameplay_visible(show: bool) -> void:
+	well.visible = show
+	entities.visible = show
+
+
 # --- State handlers ---
 
 ## CPAUSE — generic timed delay. Decrements timer, transitions to next state.
@@ -302,44 +328,35 @@ func _state_pause() -> void:
 		state = pause_next_state
 
 
-## Attract mode cycle. See ATTRACT_MODE.md.
-## Sequence: CDLADR (high scores) → CLOGO (logo) → Demo gameplay → repeat.
-##
-## CLOGO has two phases driven by BOXPRO and LOGPRO in ALSCO2.MAC:
-## Phase 0 (BOXPRO): Rainbow of VORBOX. FARY 0x19→0xA0 (+0x14/frame).
-##   Once FARY>=0x50, NEARY increases by FARINC(8). Ends when NEARY>=FARY.
-## Phase 1 (LOGPRO): Rainbow of TEMPEST logo. NEARY decreases by 1 toward 0x30.
-##   Once NEARY<0x80, FARY decreases by 1. FARY clamped >= NEARY.
-## High score display: ITIMHI=60 frames@60Hz ≈ 20 ticks@20Hz.
-## LOGINI: QTMPAUS=0xDF(223 decimal ≈ 11 seconds), game state CPAUSE.
+## Attract mode cycle. See ATTRACT_MODE.md, ALEXEC.MAC § DLADR, ALSCO2.MAC § LOGINI.
+## Sequence: CDLADR (high scores, ~10s) → CLOGO (logo, ~5.3s) → Demo gameplay → repeat.
 
-# Logo / attract timing
-const ATTRACT_HISCORE_TIME: int = 20  # ~1 second (ITIMHI ≈ 60 frames@60Hz)
-# BOXPRO/LOGPRO are self-timed via FARY/NEARY convergence, not fixed timers.
-# LOGINI sets QTMPAUS=0xDF for the overall pause, but the display routines
-# advance FARY/NEARY each frame and transition when they converge.
+# Attract timing — converted from original 60Hz values to our 20Hz tick rate.
+# DLADR: QTMPAUS=$A0 with prescaler. User observation: ~10 seconds on original hardware.
+const ATTRACT_HISCORE_TIME: int = 200  # ~10 seconds (matching observed original timing)
 
 var attract_timer: int = 0
 
 # BOXPRO/LOGPRO state — driven by FARY/NEARY depth parameters
 # See ALSCO2.MAC § LOGINI, BOXPRO, LOGPRO
-var logo_phase: int = 0    # 0=BOXPRO (shrinking box), 1=LOGPRO (approaching logo)
-var logo_fary: int = 0x19  # Far depth point
-var logo_neary: int = 0x18 # Near depth point
+var logo_phase: int = 0      # 0=BOXPRO (shrinking box), 1=LOGPRO (approaching logo)
+var logo_fary: float = 0x19  # Far depth point (float for smooth frame-rate animation)
+var logo_neary: float = 0x18 # Near depth point (float for smooth frame-rate animation)
 const FARINC: int = 8      # NEARY increment in BOXPRO (FARINC constant)
 
-# LOGINI sets QSTATE=CPAUSE with QTMPAUS=0xDF (223 frames at 60Hz ≈ 3.7s).
-# Animation runs in parallel as display state. After convergence, logo holds until
-# QTMPAUS expires. At our 20Hz tick rate, the animation runs 3x slower (~8s),
-# so we add a hold timer after convergence to keep the logo on screen.
-const LOGO_HOLD_TIME: int = 60  # ~3 seconds hold after animation converges
+# LOGINI: Total logo display time. ATTRACT_MODE.md documents TIMBOX=128 + TIMLOG=192
+# = 320 frames at 60Hz = 5.3 seconds for the full logo sequence.
+# At 20Hz: 5.3 * 20 ≈ 107 ticks. The SCARNG animation converges in ~55 ticks,
+# leaving ~52 ticks (~2.6s) of hold showing the converged logo.
+const LOGO_TOTAL_TIME: int = 107  # ~5.3s (TIMBOX+TIMLOG=320 frames at 60Hz)
 var logo_converged: bool = false
-var logo_hold_timer: int = 0
+var logo_total_timer: int = 0  # Overall CPAUSE timer for logo phase
 
 ## Begin attract mode high score display phase (CDLADR).
 func _begin_attract_hiscore() -> void:
 	attract_mode = true
 	attract_timer = ATTRACT_HISCORE_TIME
+	_set_gameplay_visible(false)
 	hud.show_high_scores(high_scores, -1, "", qframe)
 	state = State.CDLADR
 
@@ -355,60 +372,66 @@ func _state_attract_ladder() -> void:
 
 ## Begin logo phase (CLOGO). See ALSCO2.MAC § LOGINI.
 ## FARY=0x19, NEARY=0x18, display state=CDBOXP (box process).
+## Total timer (107 ticks = ~5.3s) runs in parallel with animation.
+## Transition to attract demo occurs when the timer expires.
 func _begin_logo() -> void:
 	logo_phase = 0
-	logo_fary = 0x19
-	logo_neary = 0x18
+	logo_fary = float(0x19)
+	logo_neary = float(0x18)
 	logo_converged = false
-	logo_hold_timer = 0
+	logo_total_timer = LOGO_TOTAL_TIME  # Start CPAUSE equivalent timer
+	_set_gameplay_visible(false)
 	state = State.CLOGO
 
 
-## CLOGO — Logo presentation driven by BOXPRO/LOGPRO.
-## See ALSCO2.MAC § BOXPRO, LOGPRO.
-## Original architecture: LOGINI sets CPAUSE with QTMPAUS=0xDF as overall timer,
-## BOXPRO/LOGPRO run as parallel display states. When QTMPAUS expires → CNEWGA.
-## Our implementation: animate BOXPRO/LOGPRO, then hold the converged logo for
-## LOGO_HOLD_TIME ticks before transitioning to the attract demo.
-func _state_logo() -> void:
-	if logo_converged:
-		# Hold phase: converged logo stays on screen until timer expires.
-		# Matches original behavior where CPAUSE timer provides hold after animation.
-		hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
-		logo_hold_timer -= 1
-		if logo_hold_timer <= 0:
-			_begin_attract_demo()
-		return
+## Advance BOXPRO/LOGPRO animation at frame rate for smooth scaling.
+## Original BOXPRO/LOGPRO ran as 60Hz display states (ALSCO2.MAC), updating
+## FARY/NEARY each display frame. We scale increments by delta*60 to match.
+func _process_logo(delta: float) -> void:
+	var rate: float = delta * 60.0  # Scale to match original 60Hz display rate
 
 	if logo_phase == 0:
-		# BOXPRO: Shrinking box rainbow
-		# FARY increases by 0x14 each frame until 0xA0
-		if logo_fary < 0xA0:
-			logo_fary = mini(logo_fary + 0x14, 0xA0)
-		# Once FARY >= 0x50, NEARY also increases by FARINC
-		if logo_fary >= 0x50:
-			logo_neary += FARINC
+		# BOXPRO: FARY increases by 0x14 per 60Hz frame
+		if logo_fary < float(0xA0):
+			logo_fary = minf(logo_fary + 20.0 * rate, float(0xA0))
+		# Once FARY >= 0x50, NEARY increases by FARINC(8) per 60Hz frame
+		if logo_fary >= float(0x50):
+			logo_neary += float(FARINC) * rate
 			# When NEARY >= FARY → transition to LOGPRO
 			if logo_neary >= logo_fary:
-				logo_neary = 0xA0
-				logo_fary = 0xA0
+				logo_neary = float(0xA0)
+				logo_fary = float(0xA0)
 				logo_phase = 1
-		hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
 	else:
-		# LOGPRO: Approaching logo rainbow
-		# NEARY decreases by 1 each frame while >= 0x30
-		if logo_neary >= 0x30:
-			logo_neary -= 1
-		# Once NEARY < 0x80, FARY also decreases by 1
-		if logo_neary < 0x80:
-			logo_fary -= 1
+		# LOGPRO: NEARY decreases by 1 per 60Hz frame toward 0x30
+		if logo_neary > float(0x30):
+			logo_neary = maxf(logo_neary - 1.0 * rate, float(0x30))
+		# Once NEARY < 0x80, FARY also decreases by 1 per 60Hz frame
+		if logo_neary < float(0x80):
+			logo_fary -= 1.0 * rate
 			if logo_fary < logo_neary:
 				logo_fary = logo_neary
-		hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
-		# LOGPRO converges when FARY reaches NEARY at minimum depth.
-		if logo_fary <= logo_neary and logo_neary < 0x30:
+		# Convergence: FARY reaches NEARY at minimum depth
+		if logo_fary <= logo_neary and logo_neary <= float(0x30):
 			logo_converged = true
-			logo_hold_timer = LOGO_HOLD_TIME
+
+	hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
+
+
+## CLOGO — Logo state. Decrements overall CPAUSE timer each tick.
+## Animation advancement handled by _process_logo() at frame rate.
+## Original: CPAUSE timer (QTMPAUS) runs in parallel with BOXPRO/LOGPRO display
+## states. When QTMPAUS expires → CNEWGA (attract demo). The animation and timer
+## are independent; the timer is what actually controls the transition.
+func _state_logo() -> void:
+	# Always update the display (for qframe-based color cycling)
+	hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
+
+	# Decrement the overall CPAUSE timer (runs in parallel with animation)
+	logo_total_timer -= 1
+	if logo_total_timer <= 0:
+		_begin_attract_demo()
+		return
 
 
 func _state_play() -> void:
@@ -478,7 +501,7 @@ func _state_play() -> void:
 			hud.set_message("")
 
 	# Update HUD
-	hud.update_display(score, lives, current_wave)
+	hud.update_display(score, lives, current_wave, qframe)
 
 
 func _enemy_fire() -> void:
@@ -577,7 +600,7 @@ func _state_endlife() -> void:
 				hud.set_message("GAME OVER")
 			state = State.CENDGA
 		else:
-			hud.update_display(score, lives, current_wave)
+			hud.update_display(score, lives, current_wave, qframe)
 			_set_pause(SECOND, State.CNEWLI)  # 1 second before respawn
 
 
@@ -591,70 +614,84 @@ func _state_newlife2() -> void:
 	state = State.CPLAY
 
 
-## CENDWAV — wave cleared. Award bonus, begin inter-level drop.
+## CENDWAV — wave cleared. Transient (1 frame). See ALEXEC.MAC § ENDWAV.
+## Increments wave counter, awards bonus, then begins inter-level drop.
+## Original: INC WAVEN1 → check BONUS flag → BONSCO/UPSCOR → JMP INEWAV.
 func _state_endwave() -> void:
-	# Award end-of-wave bonus
-	var bonus_idx: int = mini(current_wave - 1, WAVE_BONUS.size() - 1)
+	# 1. Increment wave number (capped at 99). See ENDWAV: CMP I,98.; IFCC; INC.
+	var old_wave: int = current_wave
+	if current_wave < 99:
+		current_wave += 1
+	# Track highest wave for wave select unlock
+	if not attract_mode and current_wave > hi_wave:
+		hi_wave = current_wave
+
+	# 2. Award end-of-wave bonus (BONSCO + UPSCOR). Indexed by old wave.
+	var bonus_idx: int = mini(old_wave - 1, WAVE_BONUS.size() - 1)
 	var bonus: int = WAVE_BONUS[bonus_idx]
 	if bonus > 0:
 		_add_score(bonus)
 		hud.set_message("BONUS %d" % bonus)
+		bonus_flash_timer = SECOND * 4  # Persist through drop + warp
 	else:
 		hud.set_message("")
 
-	# Begin inter-level drop: player descends through well to destroy remaining spikes.
+	# 3. Begin inter-level drop. See GAME_STATE_FLOW.md § CDROP.
 	drop_velocity = 0.0
 	drop_y = player.cursy
+	drop_eye_start = well.eye.y  # Save camera start for tracking offset
+	player.in_drop = true  # Switch player to direct-projection rendering
 	state = State.CDROP
 
 
-## CNEWV2 — warp transition between waves. Camera dives INTO the well.
-## See PLAYFIELD.md § 5.3: EYL += $18 per frame (eye moves forward through tube).
-## Camera must NOT cross world.y = 0x10 (near rim) or projection inverts.
+## CNEWV2 — warp transition (zoom into new well). See ALWELG.MAC § NEWAV2.
+## New well is loaded at the start. Camera begins far away (well appears as a tiny
+## spec) and advances at constant velocity EYL += $18 per frame toward EYLDES.
+## The 1/dy perspective projection naturally makes the well grow from tiny to full
+## playing size. ZADJL interpolates toward ZADEST for vanishing point morphing.
+## Player is on rim of new well, can move (MOVCUR). Fire disabled.
 func _state_warp() -> void:
 	warp_timer += 1
 
-	# Phase 0: dive in (accelerating toward near rim) — 30 frames
-	# Phase 1: new well, zoom in from far away — 30 frames
-	const WARP_HALF: int = 30
-	const NEAR_Y: float = 0x10  # Near rim world Y — camera must stay below this
-
-	if warp_phase == 0:
-		# Quadratic ease-in: accelerates toward near rim, stops at 95%
-		var t: float = float(warp_timer) / float(WARP_HALF)
-		var max_forward: float = (NEAR_Y - warp_eye_start) * 0.95
-		well.eye.y = warp_eye_start + max_forward * t * t
-		well.queue_redraw()
-
-		if warp_timer >= WARP_HALF:
-			# Midpoint: load new well shape
-			_load_wave_visuals(current_wave)
-			var shape_data: Dictionary = LevelData.get_well_data(current_wave)
-			warp_eye_start = -float(shape_data.holeyl)
-			warp_zadj_start = float(shape_data.holzad) / 256.0
-			# Start camera far behind the new well (very small on screen)
-			well.eye.y = warp_eye_start - 300.0
-			warp_phase = 1
-			warp_timer = 0
+	# Player can move during warp (original: JMP MOVCUR at end of NEWAV2)
+	if not attract_mode:
+		player.move(_spinner_delta)
 	else:
-		# Quadratic ease-out: decelerates as it approaches final position
-		var t: float = float(warp_timer) / float(WARP_HALF)
-		var far_start: float = warp_eye_start - 300.0
-		well.eye.y = lerpf(far_start, warp_eye_start, 1.0 - (1.0 - t) * (1.0 - t))
-		well.z_adjust = warp_zadj_start
+		player.move(_autocu())
+	well.player_line = player.cursl1
+	_fire_pressed = false
+	_zap_pressed = false
+
+	# Camera advances at constant speed toward destination
+	well.eye.y += WARP_SPEED
+
+	# Z-adjust interpolation: linearly from 0 to target as camera approaches.
+	# Original: ZADJL += ZADEST >> 2 per frame (constant increment). We use
+	# progress-based lerp for equivalent smooth approach.
+	var warp_range: float = warp_eye_dest - warp_eye_start
+	if absf(warp_range) > 0.001:
+		var progress: float = clampf((well.eye.y - warp_eye_start) / warp_range, 0.0, 1.0)
+		well.z_adjust = lerpf(0.0, warp_zadj_dest, progress)
+
+	well.queue_redraw()
+
+	# Check if camera reached destination
+	if well.eye.y >= warp_eye_dest:
+		well.eye.y = warp_eye_dest
+		well.z_adjust = warp_zadj_dest
 		well.queue_redraw()
 
-		if warp_timer >= WARP_HALF:
-			if attract_mode:
-				# Original NEWAV2: BIT QSTATUS; IFPL; LDA I,CENDGA; END IT
-				# In attract mode, end the demo after clearing a wave.
-				game_over_timer = SECOND
-				state = State.CENDGA
-			else:
-				# Warp complete — start new wave
-				hud.set_message("SUPERZAPPER RECHARGE")
-				_start_wave(current_wave)
-				bonus_flash_timer = SECOND * 2
+		if attract_mode:
+			# NEWAV2: BIT QSTATUS; IFPL; LDA I,CENDGA
+			game_over_timer = SECOND
+			state = State.CENDGA
+		else:
+			# Warp complete — begin gameplay. Wave already initialized in _begin_warp.
+			hud.set_message("SUPERZAPPER RECHARGE")
+			bonus_flash_timer = SECOND * 2
+			state = State.CPLAY
+
+	hud.update_display(score, lives, current_wave, qframe)
 
 
 ## PROSUZ — Activate superzapper. See ENTITIES.md § Superzapper.
@@ -718,14 +755,32 @@ func _state_gameover() -> void:
 			state = State.CHISCHK
 
 
-## CDROP — Inter-level drop. Player descends through well, can hit spikes.
-## Acceleration = 20 + min(wave, 30) per frame. See ENTITIES.md § Inter-Level Drop.
+## CDROP — Inter-level drop. See ALWELG.MAC § PLDROP, MOVCUD.
+## Player descends through well with acceleration, can move/fire, spikes kill.
+## Acceleration: min(CURWAV * 4, 30) + 20 as 8-bit value in 8.8 fixed-point velocity.
 func _state_drop() -> void:
-	# Player can still move and fire during drop
+	# PLDROP subroutine order: MOVCUR, MOVCUD, PROEXP, FIREPC, MOVCHA.
 	player.move(_spinner_delta)
 	well.player_line = player.cursl1
 	well.queue_redraw()
 
+	# MOVCUD: accelerating descent with 8.8 fixed-point velocity.
+	# Original: accel = min(CURWAV << 2, $1E) + $14, added to CURSVL with carry.
+	var accel: float = float(mini(current_wave * 4, 30) + 20) / 256.0
+	drop_velocity += accel
+	drop_y += drop_velocity
+	player.cursy = drop_y
+
+	# Camera follows player — maintain the initial camera-to-rim distance.
+	# This keeps the player at consistent projection scale while the well
+	# streams past. Near rim flies off-screen, far end approaches.
+	var initial_dy: float = 0x10 - drop_eye_start  # Normal camera-to-rim distance
+	well.eye.y = drop_y - initial_dy
+
+	# PROEXP — tick active explosion animations
+	enemy_mgr.tick_explosions()
+
+	# FIREPC + MOVCHA — fire and advance player shots
 	if _fire_pressed:
 		projectiles.fire(player.cursl1, player.cursl2)
 		_fire_pressed = false
@@ -733,13 +788,7 @@ func _state_drop() -> void:
 
 	projectiles.move_all(enemy_mgr.spikes)
 
-	# Accelerating descent: velocity increases each frame
-	var accel: float = (20.0 + float(mini(current_wave, 30))) / 256.0
-	drop_velocity += accel
-	drop_y += drop_velocity
-	player.cursy = drop_y
-
-	# Check spike collision during drop — spike kills player
+	# Spike collision — spike kills player during drop
 	var player_lane: int = player.cursl1
 	if enemy_mgr.spikes.size() > player_lane:
 		if enemy_mgr.spikes[player_lane] < 0xF0 and drop_y >= float(enemy_mgr.spikes[player_lane]):
@@ -749,17 +798,42 @@ func _state_drop() -> void:
 	# Update spike rendering
 	well.spike_depths = enemy_mgr.spikes
 
-	# Check if player reached bottom of well
+	# MOVCUD exit: when CURSY >= ILINDDY (0xF0), begin warp to next level.
+	# Wave already incremented in CENDWAV.
 	if drop_y >= 0xF0:
-		# Advance wave (cap at 99) and start warp
-		current_wave = mini(current_wave + 1, 99)
-		warp_timer = 0
-		warp_phase = 0
-		warp_eye_start = well.eye.y
-		warp_zadj_start = well.z_adjust
-		state = State.CNEWV2
+		_begin_warp()
+		return
 
-	hud.update_display(score, lives, current_wave)
+	hud.update_display(score, lives, current_wave, qframe)
+
+
+## Begin warp transition to new well. Called when CDROP completes (player reached
+## far end of old well). Loads new well via _start_wave, then overrides camera to
+## a far-away position so the well appears as a tiny spec. CNEWV2 state then
+## advances camera at constant speed — perspective projection makes it grow.
+func _begin_warp() -> void:
+	# Full wave init: load new well shape, init enemies, reset player to rim
+	_start_wave(current_wave)
+
+	# Save the normal playing camera position as warp destination
+	warp_eye_dest = well.eye.y
+	warp_zadj_dest = well.z_adjust
+
+	# Position camera far away — well appears tiny in the distance
+	warp_eye_start = warp_eye_dest - WARP_DISTANCE
+	well.eye.y = warp_eye_start
+	well.z_adjust = 0.0
+	well.queue_redraw()
+
+	# Show SUPERZAPPER RECHARGE during warp (real game only)
+	if not attract_mode:
+		hud.set_message("SUPERZAPPER RECHARGE")
+	else:
+		hud.set_message("")
+	bonus_flash_timer = 0
+
+	warp_timer = 0
+	state = State.CNEWV2
 
 
 ## Begin attract mode gameplay demo. See ATTRACT_MODE.md § Gameplay Demonstration.
@@ -772,9 +846,8 @@ func _begin_attract_demo() -> void:
 	# Choose random level from first 8 entries of LEVEL table (AND I,7)
 	var level_idx: int = randi() % 8
 	current_wave = LevelData.LEVEL_TABLE[level_idx]
-	hud.show_gameplay()
 	hud.set_message("")
-	_start_wave(current_wave)  # Sets state to CPLAY
+	_start_wave(current_wave)  # Sets state to CPLAY, calls hud.show_gameplay(attract_mode)
 
 
 ## Return to attract mode (from game over or high score display).
@@ -792,6 +865,7 @@ var select_lefsid: int = 0  # Left edge of visible 5-column window (LEFSID)
 ## Begin wave select: compute HIRATE from HIWAVE, start 10-second timer.
 ## See ALWELG.MAC § INIRA0.
 func _begin_wave_select() -> void:
+	_set_gameplay_visible(false)
 	attract_mode = false
 	score = 0
 	lives = INITIAL_LIVES
@@ -879,8 +953,7 @@ func _state_wave_select() -> void:
 func _confirm_wave_select() -> void:
 	current_wave = LevelData.LEVEL_TABLE[select_cursor]
 	hud.set_message("")
-	hud.show_gameplay()
-	_start_wave(current_wave)
+	_start_wave(current_wave)  # calls hud.show_gameplay(attract_mode)
 
 
 # --- High Score System ---
@@ -897,6 +970,7 @@ func _init_high_scores() -> void:
 
 ## CHISCHK — Check if player's score qualifies for high score table.
 func _state_hiscore_check() -> void:
+	_set_gameplay_visible(false)
 	hs_insert_idx = -1
 	# Find insertion point (table is sorted descending)
 	for i in high_scores.size():
@@ -1034,4 +1108,4 @@ func _add_score(points: int) -> void:
 			lives += 1
 			bonus_flash_timer = SECOND  # Flash for 1 second
 			next_bonus_idx += 1
-	hud.update_display(score, lives, current_wave)
+	hud.update_display(score, lives, current_wave, qframe)

@@ -83,13 +83,13 @@ All UI screens implemented from actual 6502 assembly source (ALSCO2.MAC, ALLANG.
 **BOXPRO/LOGPRO** (Logo sequence): SCARNG routine draws shape at multiple depths from NEARY to FARY (step 2). Scale: `binary=INDEX>>5, linear=(INDEX<<2)&0x7F`. Color: leading=WHITE, trailing=`(INDEX>>3)&7` with 7→RED. BOXPRO uses VORBOX (rectangle), LOGPRO uses VORLIT (TEMPEST text).
 
 **LDRDSP** (High scores): Full screen with three sections:
-- **INFO** (top): P1 score GREEN top-left, high score + #1 initials GREEN center (SCORES template in ALVROM.MAC, no text label). INSERT COINS RED flashing (QFRAME & 0x1F < 0x10).
+- **INFO** (top): P1 score GREEN top-left, high score + #1 initials GREEN center (SCORES template in ALVROM.MAC, no text label). INSERT COINS / GAME OVER alternating RED (QFRAME & 0x1F < 0x10).
 - **LDROUT** (middle): "HIGH SCORES" RED scale 0 Y=0x38. 8 entries BLULET at X=-48, Y from 40 to -30 (decimal step -10). Format: rank.dot space initials space score.
 - **DSPCRD** (bottom): "© MCMLXXX ATARI" BLULET Y=0x92, "BONUS EVERY 20000" TURQOI Y=0x89, "CREDITS 0" + "1 COIN 1 PLAY" GREEN Y=0x80.
 
 **GETDSP** (Initials entry): "PLAYER X" at Y=0xC0, "ENTER YOUR INITIALS" RED, "SPIN KNOB" TURQOI, "PRESS FIRE" YELLOW. Falls into LDROUT for score table.
 
-**RQRDSP** (Wave select): 5-column scrolling display. XPOTAB X-positions: -66,-29,9,48,88. LEFSID/RITSID window tracking. LEVEL table (28 entries) gated by HIRATE.
+**RQRDSP** (Wave select): 5-column scrolling display. XPOTAB X-positions: -66,-29,9,48,88. LEFSID/RITSID window tracking. LEVEL table (28 entries) gated by HIRATE. Uses local X multiplier (`_WS_XM=2.65`) instead of standard VGVTR1 (3.28) to keep ASCVH -117 labels on-screen within our 768-wide viewport. All column content (level number, hole shape, bonus) centered on XPOTAB column position. Level numbers and hole shapes use per-band difficulty colors (Blue/Red/Yellow/Cyan/Green/Purple cycling every 16 waves via `BAND_COLORS`).
 
 ### VG Coordinate Mapping
 

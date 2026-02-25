@@ -78,10 +78,11 @@ func _draw() -> void:
 
 
 ## WORSCR perspective projection. See HARDWARE_REGISTERS.md § WORSCR Protocol.
+## Clamps dy >= 1.0 so vertices behind the camera project to extreme off-screen
+## positions in the correct direction (Godot clips them). This handles the
+## inter-level fly-through where the camera advances past near rim vertices.
 func project(world: Vector3) -> Vector2:
-	var dy: float = world.y - eye.y
-	if absf(dy) < 0.001:
-		dy = 0.001
+	var dy: float = maxf(world.y - eye.y, 1.0)
 	var inv: float = 1.0 / dy
 	var sx: float = (world.x - eye.x) * inv
 	var sz: float = (world.z - eye.z) * inv + z_adjust

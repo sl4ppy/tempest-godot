@@ -43,13 +43,14 @@ var entry_player: int = 1  # Player number (1 or 2)
 
 # Logo state — BOXPRO/LOGPRO rainbow parameters from SCARNG
 # See ALSCO2.MAC § LOGINI, BOXPRO, LOGPRO, SCARNG
-var logo_phase: int = 0  # 0=BOXPRO (shrinking box), 1=LOGPRO (approaching logo)
-var logo_fary: int = 0x19   # Far depth (increases in BOXPRO, decreases in LOGPRO)
-var logo_neary: int = 0x18  # Near depth (increases in BOXPRO, decreases in LOGPRO)
+var logo_phase: int = 0    # 0=BOXPRO (shrinking box), 1=LOGPRO (approaching logo)
+var logo_fary: float = 0x19   # Far depth (float for smooth frame-rate animation)
+var logo_neary: float = 0x18  # Near depth (float for smooth frame-rate animation)
 
 # INSERT COINS flash state
 var show_insert_coin: bool = true
 var has_credits: bool = false
+var attract_mode: bool = false  # When true, gameplay shows attract overlay (INFO+DSPCRD)
 
 # --- Coordinate mapping ---
 # VG coordinate system: center-origin, Y-up, range ~ ±500 at binary scale 1.
@@ -108,22 +109,48 @@ func _draw() -> void:
 
 
 ## CDPLAY — In-game HUD. See UI.md § In-Game HUD, ALSCO2.MAC § INFO/UPSCLI.
-## Layout: P1 score top-left, high score top-center, lives top-right.
+## In attract mode, INFO shows the same overlay as the high score screen
+## (high score + initials, INSERT COINS/GAME OVER, copyright, bonus, credits)
+## but without the score table — the well is visible behind it.
 func _draw_gameplay() -> void:
 	var green: Color = Colors.get_color(Colors.GREEN)
 	var yellow: Color = Colors.get_color(Colors.YELLOW)
+	var red: Color = Colors.get_color(Colors.RED)
 
-	# Score — top left (Player 1 score)
-	VectorFont.draw_text(self, str(score), Vector2(20, 30), green, SCALE_1, LW_1)
+	if attract_mode:
+		# --- Attract mode gameplay: INFO + DSPCRD overlay ---
+		# Same layout as high score screen top/bottom, no score table in middle.
 
-	# High score — top center
-	VectorFont.draw_text_centered(self, str(high_score), Vector2(SCREEN_CX, 30), green, SCALE_1, LW_1)
+		# High score + #1 initials — GREEN, centered
+		if score_table.size() > 0:
+			var hs_entry: Dictionary = score_table[0]
+			var hs_text: String = str(hs_entry.score) + " " + hs_entry.initials
+			VectorFont.draw_text_centered(self, hs_text, Vector2(SCREEN_CX, 50), green, SCALE_1, LW_1)
 
-	# Lives — top right (displayed as count)
-	VectorFont.draw_text_right(self, str(lives), Vector2(748, 30), yellow, SCALE_1, LW_1)
+		# Player score — GREEN, top-left
+		VectorFont.draw_text(self, str(score), Vector2(20, 30), green, SCALE_1, LW_1)
 
-	# Wave — bottom center
-	VectorFont.draw_text_centered(self, "WAVE " + str(wave), Vector2(SCREEN_CX, 990), green, SCALE_1, LW_1)
+		# INSERT COINS / GAME OVER — RED, alternating
+		if show_insert_coin:
+			VectorFont.draw_text_centered(self, "INSERT COINS", Vector2(SCREEN_CX, _msgs_y(0x56)), red, SCALE_1, LW_1)
+		else:
+			VectorFont.draw_text_centered(self, "GAME OVER", Vector2(SCREEN_CX, _msgs_y(0x56)), red, SCALE_1, LW_1)
+
+		# DSPCRD — bottom section
+		_draw_dspcrd()
+	else:
+		# --- Normal gameplay HUD ---
+		# Score — top left (Player 1 score)
+		VectorFont.draw_text(self, str(score), Vector2(20, 30), green, SCALE_1, LW_1)
+
+		# High score — top center
+		VectorFont.draw_text_centered(self, str(high_score), Vector2(SCREEN_CX, 30), green, SCALE_1, LW_1)
+
+		# Lives — top right (displayed as count)
+		VectorFont.draw_text_right(self, str(lives), Vector2(748, 30), yellow, SCALE_1, LW_1)
+
+		# Wave — bottom center
+		VectorFont.draw_text_centered(self, "WAVE " + str(wave), Vector2(SCREEN_CX, 990), green, SCALE_1, LW_1)
 
 	# Center message (GAME OVER, SUPERZAPPER RECHARGE, bonus, etc.)
 	if message != "":
@@ -132,8 +159,39 @@ func _draw_gameplay() -> void:
 
 ## RQRDSP — "Rate Yourself" wave select screen.
 ## See ALSCO2.MAC § RQRDSP: 5 visible columns at XPOTAB positions,
-## scrolling window via LEFSID/RITSID, level numbers + bonus + well preview.
+## scrolling window via LEFSID/RITSID, level numbers + hole previews + bonus.
 ## Messages displayed in reverse order from MSGTAB.
+## Column layout: LEVEL row (numbers), HOLE row (miniature wells), BONUS row (points).
+## Row labels (LEVEL, HOLE, BONUS) on far left (ASCVH prefix 0x8B = -117).
+
+# BONPTM table from ALWELG.MAC — BCD values ×100 for display.
+# 28 entries, one per LEVEL table index.
+const BONUS_DISPLAY: Array[int] = [
+	0, 6000, 16000, 32000, 54000, 74000, 94000, 114000, 134000,
+	152000, 170000, 188000, 208000, 226000, 248000, 266000, 300000, 340000,
+	382000, 415000, 439000, 472000, 531000, 581000,
+	624000, 656000, 766000, 898000,
+]
+
+# Wave select X multiplier — the standard VGVTR1 multiplier (4.0 × VG_SCALE = 3.28)
+# pushes ASCVH -117 labels to pixel 0, off the visible screen. The original VG hardware
+# displayed on a 1024×1024 space mapped to a 3:4 portrait CRT where labels at VG X=44
+# were visible. Our 768-wide viewport needs a reduced X multiplier to keep labels
+# on-screen while maintaining correct column spacing proportions.
+const _WS_XM: float = 2.65
+
+# Difficulty band colors — each 16-wave band has a uniform color.
+# Matches the original Tempest progression: Blue, Red, Yellow, Cyan, Green, Purple.
+const BAND_COLORS: Array[int] = [6, 3, 1, 4, 5, 2]
+
+func _ws_x(vg_signed: int) -> float:
+	return SCREEN_CX + float(vg_signed) * _WS_XM
+
+func _get_band_color(wave_num: int) -> Color:
+	@warning_ignore("integer_division")
+	var band: int = (wave_num - 1) / 16
+	return Colors.get_color(BAND_COLORS[band % BAND_COLORS.size()])
+
 func _draw_wave_select() -> void:
 	var red: Color = Colors.get_color(Colors.RED)
 	var green: Color = Colors.get_color(Colors.GREEN)
@@ -142,37 +200,40 @@ func _draw_wave_select() -> void:
 	var yellow: Color = Colors.get_color(Colors.YELLOW)
 	var blulet: Color = Colors.get_color(Colors.BLULET)
 
-	# Atari copyright at Y=0x60=96 (MSGEN3 with A=0x60). See RQRDSP.
-	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _vg_y(0x60)), blulet, SCALE_1, LW_1)
+	# Copyright at Y=0x60 via MSGEN3. See RQRDSP line 1081.
+	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _msgs_y(0x60)), blulet, SCALE_1, LW_1)
 
-	# "PLAYER 1" — drawn by DPLRNO
-	VectorFont.draw_text_centered(self, "PLAYER " + str(entry_player), Vector2(SCREEN_CX, _vg_y(0x1A, 0)), white, SCALE_0, LW_0)
+	# "PLAYER X" — DPLRNO: MPLAYR at Y=0x1A, scale 0, prefix 0xCD(-51).
+	VectorFont.draw_text_centered(self, "PLAYER " + str(entry_player), Vector2(SCREEN_CX, _msgs_y(0x1A)), white, SCALE_0, LW_0)
 
-	# Messages from MSGTAB in reverse order (per RQRDSP loop):
-	# RATE YOURSELF — GREEN, scale 1, Y=10
-	VectorFont.draw_text_centered(self, "RATE YOURSELF", Vector2(SCREEN_CX, _vg_y(10)), green, SCALE_1, LW_1)
+	# Messages from MSGTAB in reverse order (per RQRDSP loop).
+	# All positions from ALLANG.MAC MESS definitions, rendered via MSGS/VGVTR1.
+	# MRATE — GREEN, scale 1, Y=10 (decimal)
+	VectorFont.draw_text_centered(self, "RATE YOURSELF", Vector2(SCREEN_CX, _vgvtr1_y(10)), green, SCALE_1, LW_1)
 
-	# SPIN KNOB TO CHANGE — TURQOI, scale 1, Y=0
-	VectorFont.draw_text_centered(self, "SPIN KNOB TO CHANGE", Vector2(SCREEN_CX, _vg_y(0)), turqoi, SCALE_1, LW_1)
+	# MPRMOV — TURQOI, scale 1, Y=0
+	VectorFont.draw_text_centered(self, "SPIN KNOB TO CHANGE", Vector2(SCREEN_CX, _vgvtr1_y(0)), turqoi, SCALE_1, LW_1)
 
-	# PRESS FIRE TO SELECT — YELLOW, scale 1, Y=-10
-	VectorFont.draw_text_centered(self, "PRESS FIRE TO SELECT", Vector2(SCREEN_CX, _vg_y(-10)), yellow, SCALE_1, LW_1)
+	# MPRFIR — YELLOW, scale 1, Y=-10 (decimal)
+	VectorFont.draw_text_centered(self, "PRESS FIRE TO SELECT", Vector2(SCREEN_CX, _vgvtr1_y(-10)), yellow, SCALE_1, LW_1)
 
-	# NOVICE — RED, scale 1, Y=-30
-	VectorFont.draw_text_centered(self, "NOVICE", Vector2(SCREEN_CX - 120, _vg_y(-30)), red, SCALE_1, LW_1)
+	# MNOVIC — RED, scale 1, Y=-30, ASCVH prefix 0xAA (-86 signed)
+	VectorFont.draw_text(self, "NOVICE", Vector2(_ws_x(-86), _vgvtr1_y(-30)), red, SCALE_1, LW_1)
 
-	# EXPERT — RED, scale 1, Y=-30
-	VectorFont.draw_text_centered(self, "EXPERT", Vector2(SCREEN_CX + 120, _vg_y(-30)), red, SCALE_1, LW_1)
+	# MEXPER — RED, scale 1, Y=-30, ASCVH prefix 0x4A (+74 signed)
+	VectorFont.draw_text(self, "EXPERT", Vector2(_ws_x(74), _vgvtr1_y(-30)), red, SCALE_1, LW_1)
 
-	# LEVEL label — GREEN, scale 1, Y=-40
-	VectorFont.draw_text_centered(self, "LEVEL", Vector2(SCREEN_CX, _vg_y(-40)), green, SCALE_1, LW_1)
+	# Row labels — GREEN, scale 1, ASCVH prefix 0x8B (-117 signed)
+	# MLEVEL Y=-40, MHOLE Y=-55, MBONUS Y=-70 (all decimal)
+	var label_x: float = _ws_x(-117)
+	VectorFont.draw_text(self, "LEVEL", Vector2(label_x, _vgvtr1_y(-40)), green, SCALE_1, LW_1)
+	VectorFont.draw_text(self, "HOLE", Vector2(label_x, _vgvtr1_y(-55)), green, SCALE_1, LW_1)
+	VectorFont.draw_text(self, "BONUS", Vector2(label_x, _vgvtr1_y(-70)), green, SCALE_1, LW_1)
 
-	# 5 visible columns of level numbers
-	# XPOTAB: 0xBE, 0xE3, 0x09, 0x30, 0x58 — signed X offsets from center
-	# 0xBE = -66, 0xE3 = -29, 0x09 = 9, 0x30 = 48, 0x58 = 88
+	# 5 visible columns — XPOTAB: 0xBE(-66), 0xE3(-29), 0x09(+9), 0x30(+48), 0x58(+88)
+	# All content centered on column X position for proper alignment.
 	var xpotab: Array[int] = [-66, -29, 9, 48, 88]
 
-	# Visible range: 5 columns starting at select_lefsid
 	for col_idx in 5:
 		var level_idx: int = select_lefsid + col_idx
 		if level_idx < 0 or level_idx > select_hirate:
@@ -184,44 +245,62 @@ func _draw_wave_select() -> void:
 		if level_num > 99:
 			continue
 
-		var col_x: float = SCREEN_CX + float(xpotab[col_idx]) * 2.5
-
-		# Level number — GREEN at Y offset for levels
 		var is_selected: bool = (level_idx == select_cursor)
-		var num_color: Color = white if is_selected else green
-		VectorFont.draw_text_centered(self, str(level_num), Vector2(col_x, _vg_y(-55)), num_color, SCALE_1, LW_1)
+		var col_cx: float = _ws_x(xpotab[col_idx])
+		var band_color: Color = _get_band_color(level_num)
 
-		# Selection box around current level — WHITE
+		# Level number — band color (WHITE if selected), centered on column
+		var lvl_y: float = _vgvtr1_y(-40)
+		var num_color: Color = white if is_selected else band_color
+		VectorFont.draw_text_centered(self, str(level_num), Vector2(col_cx, lvl_y), num_color, SCALE_1, LW_1)
+
+		# Hole preview — miniature well shape, Y=-52 (0xCC), centered on column
+		# See ALDISP.MAC § DSPHOL: draws well outline at VG binary scale 5.
+		var hole_y: float = _vgvtr1_y(-52)
+		_draw_well_preview(level_num, Vector2(col_cx, hole_y), band_color)
+
+		# Bonus — RED, Y=-70, centered on column
+		var bonus_y: float = _vgvtr1_y(-70)
+		var bonus_idx: int = mini(level_idx, BONUS_DISPLAY.size() - 1)
+		var bonus_str: String = str(BONUS_DISPLAY[bonus_idx])
+		VectorFont.draw_text_centered(self, bonus_str, Vector2(col_cx, bonus_y), red, SCALE_1, LW_1)
+
+		# Selection box — WHITE, encompasses LEVEL/HOLE/BONUS rows.
+		# BOXTAB: 26 wide × 28 tall in VGVTR1 units, centered on column.
 		if is_selected:
-			var box_cx: float = col_x
-			var box_cy: float = _vg_y(-55) + 6.0
-			var bw: float = 30.0
-			var bh: float = 24.0
-			draw_rect(Rect2(box_cx - bw/2, box_cy - bh/2, bw, bh), white, false, 1.5)
+			var box_hw: float = 13.0 * _WS_XM  # Half-width (BOXTAB 26/2)
+			var box_top: float = lvl_y - 8.0
+			var box_bot: float = bonus_y + 16.0
+			draw_rect(Rect2(col_cx - box_hw, box_top, box_hw * 2.0, box_bot - box_top), white, false, 1.5)
 
-	# BONUS label — GREEN, scale 1, Y=-70
-	VectorFont.draw_text_centered(self, "BONUS", Vector2(SCREEN_CX, _vg_y(-70)), green, SCALE_1, LW_1)
+	# TIME — GREEN, Y=0x98, centered with timer value
+	var time_y: float = _msgs_y(0x98)
+	var time_str: String = "TIME " + (str(select_timer) if select_timer >= 0 else "")
+	VectorFont.draw_text_centered(self, time_str, Vector2(SCREEN_CX, time_y), green, SCALE_1, LW_1)
 
-	# Bonus points for each visible column
-	# WAVE_BONUS table: [0, 60, 160, 320, 540, 740, 940, 1140, 1340]
-	var wave_bonus: Array[int] = [0, 60, 160, 320, 540, 740, 940, 1140, 1340]
-	for col_idx in 5:
-		var level_idx: int = select_lefsid + col_idx
-		if level_idx < 0 or level_idx > select_hirate:
-			continue
-		if level_idx >= LevelData.LEVEL_TABLE.size():
-			continue
-		var col_x: float = SCREEN_CX + float(xpotab[col_idx]) * 2.5
-		var bonus_idx: int = mini(level_idx, wave_bonus.size() - 1)
-		VectorFont.draw_text_centered(self, str(wave_bonus[bonus_idx]), Vector2(col_x, _vg_y(-85)), red, SCALE_1 * 0.7, LW_1)
 
-	# TIME display — GREEN, scale 1, Y=0x98=152
-	VectorFont.draw_text_centered(self, "TIME", Vector2(SCREEN_CX - 60, _vg_y(-110)), green, SCALE_1, LW_1)
-	if select_timer >= 0:
-		VectorFont.draw_text(self, str(select_timer), Vector2(SCREEN_CX + 30, _vg_y(-110)), green, SCALE_1, LW_1)
+## Draw miniature well shape preview for RQRDSP HOLE row.
+## See ALDISP.MAC § DSPHOL: draws well outline at VG binary scale 5 (1/32).
+## Uses LINEX/LINEZ vertices, adjusted from unsigned (center=0x80) to signed.
+func _draw_well_preview(wave_num: int, center: Vector2, override_color: Color = Color(-1, -1, -1)) -> void:
+	var shape_data: Dictionary = LevelData.get_well_data(wave_num)
+	var linex: Array = shape_data.linex
+	var linez: Array = shape_data.linez
+	var planar: bool = shape_data.planar
+	# VG scale 5 = 4/(2^5) = 0.125 per unit. With VG_SCALE ≈ 0.1 per unit.
+	var preview_scale: float = 0.13
+	var color: Color = override_color if override_color.r >= 0.0 else Colors.get_well_color(wave_num)
 
-	# INSERT COINS / PRESS START at bottom
-	_draw_coin_prompt()
+	var points: Array[Vector2] = []
+	for i in 16:
+		var sx: float = (float(linex[i]) - 128.0) * preview_scale
+		var sz: float = (float(linez[i]) - 128.0) * preview_scale
+		points.append(center + Vector2(sx, -sz))
+
+	var num_segments: int = 15 if planar else 16
+	for i in num_segments:
+		var next_idx: int = (i + 1) % 16
+		draw_line(points[i], points[next_idx], color, 1.0)
 
 
 ## CDHITB — High score table ("Ladder"). See ALSCO2.MAC § LDRDSP/LDROUT.
@@ -262,11 +341,15 @@ func _draw_high_scores() -> void:
 	# SCORES template: VCTR -1C0,16C from center → screen X≈64, Y≈148
 	VectorFont.draw_text(self, str(score), Vector2(20, 30), green, SCALE_1, LW_1)
 
-	# INSERT COINS / PRESS START — RED, scale 1, Y=0x56 (centered, flashing)
-	# MINSER: RED, scale 1, Y=0x56. Flash: QFRAME & 0x1F < 0x10.
-	# If message is set (e.g., "PRESS START"), it replaces INSERT COINS at the same Y.
-	if message == "" and show_insert_coin:
-		VectorFont.draw_text_centered(self, "INSERT COINS", Vector2(SCREEN_CX, _msgs_y(0x56)), red, SCALE_1, LW_1)
+	# INSERT COINS / GAME OVER — RED, scale 1, Y=0x56 (centered, alternating)
+	# Original INFO routine: D2GAME flashes INSERT COINS, DGOVER shows GAME OVER.
+	# In attract mode, these alternate on a 32-frame cycle (QFRAME & 0x1F < 0x10).
+	# If message is set (e.g., "PRESS START"), it replaces both at the same Y.
+	if message == "":
+		if show_insert_coin:
+			VectorFont.draw_text_centered(self, "INSERT COINS", Vector2(SCREEN_CX, _msgs_y(0x56)), red, SCALE_1, LW_1)
+		else:
+			VectorFont.draw_text_centered(self, "GAME OVER", Vector2(SCREEN_CX, _msgs_y(0x56)), red, SCALE_1, LW_1)
 
 	# --- LDROUT: High score table ---
 
@@ -275,13 +358,10 @@ func _draw_high_scores() -> void:
 	VectorFont.draw_text_centered(self, "HIGH SCORES", Vector2(SCREEN_CX, _msgs_y(0x38)), red, SCALE_0, LW_0)
 
 	# Score entries — LDROUT loop: 8 entries (NHISCO)
-	# VGCNTR + VGVTR1(A=0xD0=-48signed, X=TEMP3)
 	# TEMP3 starts at 40. (decimal), decrements by 10. per row → 40,30,20,10,0,-10,-20,-30
-	# X position: 0xD0 = -48 signed → VGVTR1: -48*4 = -192 VG units from center
 	# Colors: BLULET default, WHITE for glowing entry (SZL match)
-	# Format: rank dot space initials space score (via DIGTYS, VGDOT, OUTINI)
+	# Format: rank space initials spaces score — centered on screen
 	var temp3: int = 40  # Decimal, per LDROUT: "LDA I,40."
-	var row_x_base: float = _vgvtr1_x(-48)  # X=0xD0 = -48 signed
 
 	for i in range(score_table.size()):
 		var entry: Dictionary = score_table[i]
@@ -292,39 +372,14 @@ func _draw_high_scores() -> void:
 		var ini: String = entry.initials if entry.initials.strip_edges() != "" else "   "
 		var sc_str: String = str(entry.score) if entry.score > 0 else "0"
 
-		# Draw: rank, dot, space, initials, space(s), score
-		var x_cursor: float = row_x_base
-		x_cursor += VectorFont.draw_text(self, rank_str, Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
-		# VGDOT — period after rank
-		x_cursor += VectorFont.draw_text(self, ".", Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
-		# VGVTR1 space (8 VG units advance) — about half a character width
-		x_cursor += VectorFont.measure_text(" ", SCALE_1) * 0.5
-		# OUTINI — 3 initials
-		x_cursor += VectorFont.draw_text(self, ini, Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
-		# VGVTR1 space (8 VG units advance)
-		x_cursor += VectorFont.measure_text("  ", SCALE_1)
-		# DIGTYS — score digits
-		VectorFont.draw_text(self, sc_str, Vector2(x_cursor, row_y), row_color, SCALE_1, LW_1)
+		# Build formatted row: "N  INI    SCORE" centered on screen
+		var row_text: String = rank_str + " " + ini + "    " + sc_str
+		VectorFont.draw_text_centered(self, row_text, Vector2(SCREEN_CX, row_y), row_color, SCALE_1, LW_1)
 
 		temp3 -= 10  # "SBC I,10." — decimal 10
 
-	# --- DSPCRD: Bottom info section ---
-	# Called by INFO. Draws coin mode, bonus interval, copyright, credits.
-
-	# MATARI — "© MCMLXXX ATARI", BLULET, scale 1, Y=0x92
-	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _msgs_y(0x92)), blulet, SCALE_1, LW_1)
-
-	# BOLOUT — "BONUS EVERY  20000", TURQOI, scale 1, Y=0x89
-	# MBOLIF message + DIGTYS for the bonus threshold value.
-	# Original shows this when BLIFIN is set (bonus life enabled).
-	VectorFont.draw_text_centered(self, "BONUS EVERY  20000", Vector2(SCREEN_CX, _msgs_y(0x89)), turqoi, SCALE_1, LW_1)
-
-	# MCREDI — "CREDITS  0", GREEN, scale 1, Y=0x80 (left-aligned)
-	# MCMOD2 — "1 COIN 1 PLAY", GREEN, scale 1, Y=0x80 (right side)
-	# These share the same Y line. MCREDI is drawn first (left), then MCMOD2 (right).
-	var credits_y: float = _msgs_y(0x80)
-	VectorFont.draw_text(self, "CREDITS  0", Vector2(70, credits_y), green, SCALE_1, LW_1)
-	VectorFont.draw_text_right(self, "1 COIN 1 PLAY", Vector2(700, credits_y), green, SCALE_1, LW_1)
+	# DSPCRD: Bottom info section
+	_draw_dspcrd()
 
 	# Optional message overlay (e.g., "PRESS START" after game over)
 	if message != "":
@@ -432,10 +487,12 @@ func _draw_scarng_box() -> void:
 	var base_w: float = 500.0
 	var base_h: float = 540.0
 
-	var idx: int = logo_neary
-	while idx < logo_fary:
+	var neary_i: int = int(logo_neary)
+	var fary_i: int = int(logo_fary)
+	var idx: int = neary_i
+	while idx <= fary_i:
 		var sf: float = _scarng_scale(idx)
-		var color: Color = _scarng_color(idx, logo_neary)
+		var color: Color = _scarng_color(idx, neary_i)
 		var hw: float = base_w * sf
 		var hh: float = base_h * sf
 		# Draw rectangle at this scale
@@ -451,10 +508,12 @@ func _draw_scarng_box() -> void:
 func _draw_scarng_logo() -> void:
 	var center: Vector2 = Vector2(SCREEN_CX, SCREEN_CY)  # VG CNTR = screen center
 
-	var idx: int = logo_neary
-	while idx < logo_fary:
+	var neary_i: int = int(logo_neary)
+	var fary_i: int = int(logo_fary)
+	var idx: int = neary_i
+	while idx <= fary_i:
 		var sf: float = _scarng_scale(idx)
-		var color: Color = _scarng_color(idx, logo_neary)
+		var color: Color = _scarng_color(idx, neary_i)
 		_draw_tempest_text(center, sf, color)
 		idx += 2
 
@@ -580,14 +639,37 @@ func _draw_coin_prompt() -> void:
 		VectorFont.draw_text_centered(self, "INSERT COINS", Vector2(SCREEN_CX, prompt_y), Colors.get_color(Colors.RED), SCALE_1, LW_1)
 
 
+## DSPCRD — Bottom info section. Called by INFO in attract mode and high score screens.
+## Draws copyright, bonus interval, credits count, coin mode.
+## See ALSCO2.MAC § DSPCRD.
+func _draw_dspcrd() -> void:
+	var blulet: Color = Colors.get_color(Colors.BLULET)
+	var green: Color = Colors.get_color(Colors.GREEN)
+	var turqoi: Color = Colors.get_color(Colors.TURQOI)
+
+	# MATARI — "© MCMLXXX ATARI", BLULET, scale 1, Y=0x92
+	VectorFont.draw_text_centered(self, "© MCMLXXX ATARI", Vector2(SCREEN_CX, _msgs_y(0x92)), blulet, SCALE_1, LW_1)
+
+	# BOLOUT — "BONUS EVERY  20000", TURQOI (cyan), scale 1, Y=0x89
+	VectorFont.draw_text_centered(self, "BONUS EVERY  20000", Vector2(SCREEN_CX, _msgs_y(0x89)), turqoi, SCALE_1, LW_1)
+
+	# MCREDI — "CREDITS  0", GREEN, scale 1, Y=0x80 (left-aligned)
+	# MCMOD2 — "1 COIN 1 PLAY", GREEN, scale 1, Y=0x80 (right side)
+	var credits_y: float = _msgs_y(0x80)
+	VectorFont.draw_text(self, "CREDITS  0", Vector2(70, credits_y), green, SCALE_1, LW_1)
+	VectorFont.draw_text_right(self, "1 COIN 1 PLAY", Vector2(700, credits_y), green, SCALE_1, LW_1)
+
+
 # --- Public API ---
 
-func update_display(new_score: int, new_lives: int, new_wave: int) -> void:
+func update_display(new_score: int, new_lives: int, new_wave: int, qframe: int = 0) -> void:
 	score = new_score
 	lives = new_lives
 	wave = new_wave
 	if score > high_score:
 		high_score = score
+	# Update INSERT COINS flash for attract mode gameplay
+	show_insert_coin = (qframe & 0x1F) < 0x10
 	queue_redraw()
 
 
@@ -596,8 +678,11 @@ func set_message(msg: String) -> void:
 	queue_redraw()
 
 
-func show_gameplay() -> void:
+func show_gameplay(is_attract: bool = false, hs_table: Array[Dictionary] = []) -> void:
 	mode = Mode.GAMEPLAY
+	attract_mode = is_attract
+	if hs_table.size() > 0:
+		score_table = hs_table
 	queue_redraw()
 
 
@@ -641,7 +726,7 @@ func show_initials_entry(table: Array[Dictionary], initials: String, slot: int,
 ## Show logo screen with BOXPRO/LOGPRO rainbow parameters.
 ## See ALSCO2.MAC § LOGINI: FARY/NEARY control the rainbow depth range.
 ## phase: 0=BOXPRO (shrinking box), 1=LOGPRO (approaching logo)
-func show_logo(phase: int, fary: int, neary: int, qframe: int = 0) -> void:
+func show_logo(phase: int, fary: float, neary: float, qframe: int = 0) -> void:
 	mode = Mode.LOGO
 	logo_phase = phase
 	logo_fary = fary

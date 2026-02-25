@@ -19,6 +19,7 @@ var cursy: float = 0x10  # Y-depth (near rim = 0x10)
 var alive: bool = true
 var is_planar: bool = false
 var num_lanes: int = 16  # 16 for closed, 15 for planar
+var in_drop: bool = false  # True during CDROP — use direct projection for rendering
 
 # Death explosion. See ENTITIES.md § Player Death (SPLAT).
 const SPLAT_SPOKES: int = 16
@@ -39,6 +40,7 @@ func init_for_wave(well_renderer: Node2D, planar: bool) -> void:
 	cursl2 = INITIAL_LANE2
 	cursy = 0x10
 	alive = true
+	in_drop = false
 	queue_redraw()
 
 
@@ -97,14 +99,36 @@ func _draw() -> void:
 		_draw_death_explosion()
 		return
 
-	# Get screen position on the rim
 	var frac: float = float(curspo % 16) / 16.0
-	var pos: Vector2 = well.get_rim_position(cursl1, frac)
+	var p1: Vector2
+	var p2: Vector2
 
-	# Orientation: tangent along rim, normal pointing outward from center
-	var p1: Vector2 = well.near_screen[cursl1]
-	var p2: Vector2 = well.near_screen[cursl2]
+	if in_drop:
+		# CDROP: camera is tracking the player through the well. The cached
+		# near_screen/far_screen are unreliable (near rim may be behind camera).
+		# Project the player's world position directly — since the camera tracks
+		# at constant distance, this gives a stable screen position.
+		var t: float = clampf((cursy - 0x10) / (0xF0 - 0x10), 0.0, 1.0)
+		var x1: float = lerpf(well.near_x[cursl1], well.far_x[cursl1], t)
+		var z1: float = lerpf(well.near_z[cursl1], well.far_z[cursl1], t)
+		var x2: float = lerpf(well.near_x[cursl2], well.far_x[cursl2], t)
+		var z2: float = lerpf(well.near_z[cursl2], well.far_z[cursl2], t)
+		p1 = well.project(Vector3(x1, cursy, z1))
+		p2 = well.project(Vector3(x2, cursy, z2))
+	elif cursy > 0x10 + 0.5:
+		# Below rim (not in drop) — interpolate along spokes at current depth
+		var depth_frac: float = well.depth_to_frac(cursy)
+		var edges: Array[Vector2] = well.get_lane_edges(cursl1, depth_frac)
+		p1 = edges[0]
+		p2 = edges[1]
+	else:
+		# At rim — use near screen positions
+		p1 = well.near_screen[cursl1]
+		p2 = well.near_screen[cursl2]
 
+	var pos: Vector2 = p1.lerp(p2, frac)
+
+	# Orientation: tangent along lane edge, normal pointing outward from center
 	var tangent: Vector2 = (p2 - p1).normalized()
 	var normal: Vector2 = Vector2(-tangent.y, tangent.x)
 	if normal.dot(well.screen_center - pos) < 0:
@@ -112,10 +136,11 @@ func _draw() -> void:
 
 	# Scale based on lane segment length
 	var seg_len: float = p1.distance_to(p2)
-	var sz: float = maxf(seg_len, 30.0)
+	var sz: float = maxf(seg_len, 10.0)
 	var color: Color = Colors.get_color(Colors.YELLOW)
+	var lw: float = 2.5
 
-	VS.draw_shape(self, "player", pos, tangent, normal, sz, color, 2.5)
+	VS.draw_shape(self, "player", pos, tangent, normal, sz, color, lw)
 
 
 ## Draw SPLAT death explosion — expanding 16-spoke starburst with cycling colors.
@@ -125,7 +150,19 @@ func _draw_death_explosion() -> void:
 		return
 
 	var frac: float = float(curspo % 16) / 16.0
-	var pos: Vector2 = well.get_rim_position(cursl1, frac)
+	var pos: Vector2
+	if in_drop and cursy > 0x10 + 0.5:
+		# During CDROP: use direct projection (camera is tracking player)
+		var t: float = clampf((cursy - 0x10) / (0xF0 - 0x10), 0.0, 1.0)
+		var x1: float = lerpf(well.near_x[cursl1], well.far_x[cursl1], t)
+		var z1: float = lerpf(well.near_z[cursl1], well.far_z[cursl1], t)
+		var x2: float = lerpf(well.near_x[cursl2], well.far_x[cursl2], t)
+		var z2: float = lerpf(well.near_z[cursl2], well.far_z[cursl2], t)
+		var pp1: Vector2 = well.project(Vector3(x1, cursy, z1))
+		var pp2: Vector2 = well.project(Vector3(x2, cursy, z2))
+		pos = pp1.lerp(pp2, frac)
+	else:
+		pos = well.get_rim_position(cursl1, frac)
 
 	# Progress: 0.0 (just died) → 1.0 (fully expanded)
 	var progress: float = 1.0 - (float(death_timer) / float(death_max))

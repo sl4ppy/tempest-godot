@@ -11,7 +11,7 @@ const PALETTE: Array[Color] = [
 	Color(0.0, 1.0, 0.8),    # 4  TURQOI  — pulsar idle
 	Color(0.0, 1.0, 0.0),    # 5  GREEN
 	Color(0.0, 0.4, 1.0),    # 6  BLUE
-	Color(0.69, 0.69, 1.0),  # 7  BLULET  — UI text
+	Color(0.0, 0.0, 1.0),    # 7  BLULET  — UI text (pure blue, shader adds glow)
 	Color(0.0, 1.0, 1.0),    # 8  PSHCTR  — player shot center
 	Color(1.0, 1.0, 1.0),    # 9  PDIWHI  — death explosion white
 	Color(1.0, 1.0, 0.0),    # 10 PDIYEL  — death explosion yellow
