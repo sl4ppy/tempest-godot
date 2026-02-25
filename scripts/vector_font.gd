@@ -176,6 +176,25 @@ func _build_chars() -> void:
 	CHARS[")"] = [
 		[8, 0, false], [4, 8, true], [0, 8, true], [-4, 8, true], [16, -24, false],
 	]
+	# Copyright symbol © — circle with C inside, matching original VG shape
+	CHARS["©"] = [
+		# Octagonal circle (radius ~10, centered at 12,12)
+		[8, 4, false],          # move to bottom-center
+		[6, 1, true],           # bottom-right arc
+		[2, 7, true],           # right side
+		[-2, 7, true],          # top-right arc
+		[-6, 1, true],          # top-center
+		[-6, -1, true],         # top-left arc
+		[-2, -7, true],         # left side
+		[2, -7, true],          # bottom-left arc
+		[6, -1, true],          # close circle
+		# C letter inside
+		[3, 3, false],          # move to bottom-right of C
+		[-6, 0, true],          # bottom horizontal
+		[0, 10, true],          # left vertical
+		[6, 0, true],           # top horizontal
+		[13, -17, false],       # advance to next character
+	]
 
 
 ## Draw a string of text using vector beam lines.

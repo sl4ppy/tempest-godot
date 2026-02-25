@@ -28,8 +28,8 @@ VectorFont="*res://scripts/vector_font.gd"
 
 [display]
 
-window/size/viewport_width=1024
-window/size/viewport_height=1024
+window/size/viewport_width=800
+window/size/viewport_height=1200
 window/stretch/mode="viewport"
 
 [dotnet]

@@ -328,11 +328,19 @@ var logo_fary: int = 0x19  # Far depth point
 var logo_neary: int = 0x18 # Near depth point
 const FARINC: int = 8      # NEARY increment in BOXPRO (FARINC constant)
 
+# LOGINI sets QSTATE=CPAUSE with QTMPAUS=0xDF (223 frames at 60Hz ≈ 3.7s).
+# Animation runs in parallel as display state. After convergence, logo holds until
+# QTMPAUS expires. At our 20Hz tick rate, the animation runs 3x slower (~8s),
+# so we add a hold timer after convergence to keep the logo on screen.
+const LOGO_HOLD_TIME: int = 60  # ~3 seconds hold after animation converges
+var logo_converged: bool = false
+var logo_hold_timer: int = 0
+
 ## Begin attract mode high score display phase (CDLADR).
 func _begin_attract_hiscore() -> void:
 	attract_mode = true
 	attract_timer = ATTRACT_HISCORE_TIME
-	hud.show_high_scores(high_scores, -1, "")
+	hud.show_high_scores(high_scores, -1, "", qframe)
 	state = State.CDLADR
 
 
@@ -340,7 +348,7 @@ func _begin_attract_hiscore() -> void:
 func _state_attract_ladder() -> void:
 	attract_timer -= 1
 	# Update INSERT COIN flash
-	hud.show_high_scores(high_scores, -1, "")
+	hud.show_high_scores(high_scores, -1, "", qframe)
 	if attract_timer <= 0:
 		_begin_logo()
 
@@ -351,12 +359,27 @@ func _begin_logo() -> void:
 	logo_phase = 0
 	logo_fary = 0x19
 	logo_neary = 0x18
+	logo_converged = false
+	logo_hold_timer = 0
 	state = State.CLOGO
 
 
 ## CLOGO — Logo presentation driven by BOXPRO/LOGPRO.
 ## See ALSCO2.MAC § BOXPRO, LOGPRO.
+## Original architecture: LOGINI sets CPAUSE with QTMPAUS=0xDF as overall timer,
+## BOXPRO/LOGPRO run as parallel display states. When QTMPAUS expires → CNEWGA.
+## Our implementation: animate BOXPRO/LOGPRO, then hold the converged logo for
+## LOGO_HOLD_TIME ticks before transitioning to the attract demo.
 func _state_logo() -> void:
+	if logo_converged:
+		# Hold phase: converged logo stays on screen until timer expires.
+		# Matches original behavior where CPAUSE timer provides hold after animation.
+		hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
+		logo_hold_timer -= 1
+		if logo_hold_timer <= 0:
+			_begin_attract_demo()
+		return
+
 	if logo_phase == 0:
 		# BOXPRO: Shrinking box rainbow
 		# FARY increases by 0x14 each frame until 0xA0
@@ -383,10 +406,9 @@ func _state_logo() -> void:
 				logo_fary = logo_neary
 		hud.show_logo(logo_phase, logo_fary, logo_neary, qframe)
 		# LOGPRO converges when FARY reaches NEARY at minimum depth.
-		# Original uses CPAUSE with QTMPAUS=0xDF (223 frames ≈ 11 sec total logo).
-		# We transition when the rainbow has fully converged.
 		if logo_fary <= logo_neary and logo_neary < 0x30:
-			_begin_attract_demo()
+			logo_converged = true
+			logo_hold_timer = LOGO_HOLD_TIME
 
 
 func _state_play() -> void:
@@ -623,10 +645,16 @@ func _state_warp() -> void:
 		well.queue_redraw()
 
 		if warp_timer >= WARP_HALF:
-			# Warp complete — start new wave
-			hud.set_message("SUPERZAPPER RECHARGE")
-			_start_wave(current_wave)
-			bonus_flash_timer = SECOND * 2
+			if attract_mode:
+				# Original NEWAV2: BIT QSTATUS; IFPL; LDA I,CENDGA; END IT
+				# In attract mode, end the demo after clearing a wave.
+				game_over_timer = SECOND
+				state = State.CENDGA
+			else:
+				# Warp complete — start new wave
+				hud.set_message("SUPERZAPPER RECHARGE")
+				_start_wave(current_wave)
+				bonus_flash_timer = SECOND * 2
 
 
 ## PROSUZ — Activate superzapper. See ENTITIES.md § Superzapper.
@@ -891,7 +919,7 @@ func _state_hiscore_check() -> void:
 	else:
 		# Score doesn't qualify — show ladder briefly and return to attract
 		ladder_timer = SECOND * 3
-		hud.show_high_scores(high_scores, -1, "PRESS START")
+		hud.show_high_scores(high_scores, -1, "PRESS START", qframe)
 		state = State.CDLADR
 
 
@@ -942,7 +970,7 @@ func _finish_initials() -> void:
 		hud.high_score = high_scores[0].score
 	# Show ladder with the new entry highlighted
 	ladder_timer = SECOND * 4
-	hud.show_high_scores(high_scores, hs_insert_idx, "PRESS START")
+	hud.show_high_scores(high_scores, hs_insert_idx, "PRESS START", qframe)
 	state = State.CDLADR
 
 
