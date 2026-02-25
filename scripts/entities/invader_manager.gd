@@ -200,6 +200,7 @@ func kill_invader(idx: int) -> int:
 
 ## Create an explosion effect at a given lane and depth.
 func _spawn_explosion(lane: int, y_depth: float, color_idx: int) -> void:
+	SoundManager.play_sound(SoundManager.SID_EX)
 	for expl in explosions:
 		if not expl.active:
 			expl.active = true
@@ -460,12 +461,18 @@ func _run_invaders() -> void:
 
 func _update_pulsar_timer() -> void:
 	var pultim: int = wave_params.pulsar_params.pultim
+	var old_pulson: int = pulson
 	pulson += pulson_dir * pultim
 	if pulson > 64:
 		pulson_dir = -1
 	elif pulson <= 0:
 		pulson = 0
 		pulson_dir = 1
+	# Pulsation sound triggers (PULSTR/PULSTO)
+	if old_pulson == 0 and pulson > 0:
+		SoundManager.play_sound(SoundManager.SID_PU)
+	elif old_pulson > 0 and pulson == 0:
+		SoundManager.play_sound(SoundManager.SID_PO)
 
 
 func _split_tanker(tanker: Dictionary) -> void:

@@ -25,6 +25,7 @@ config/icon="res://icon.svg"
 LevelData="*res://scripts/level_data.gd"
 Colors="*res://scripts/colors.gd"
 VectorFont="*res://scripts/vector_font.gd"
+SoundManager="*res://scripts/sound_manager.gd"
 
 [display]
 

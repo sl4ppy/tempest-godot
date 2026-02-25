@@ -65,6 +65,8 @@ func move(input_delta: int) -> void:
 	if not alive:
 		return
 
+	var old_lane: int = cursl1
+
 	# Clamp spinner input
 	var clamped: int = clampi(input_delta, -SPINNER_CLAMP, SPINNER_CLAMP)
 
@@ -88,6 +90,10 @@ func move(input_delta: int) -> void:
 	if is_planar:
 		cursl2 = mini(cursl2, 15)
 
+	# Play cursor move sound on lane change (SBOING)
+	if cursl1 != old_lane:
+		SoundManager.play_sound(SoundManager.SID_LO)
+
 	queue_redraw()
 
 
@@ -99,9 +105,14 @@ func _draw() -> void:
 		_draw_death_explosion()
 		return
 
-	var frac: float = float(curspo % 16) / 16.0
-	var p1: Vector2
-	var p2: Vector2
+	# DSPCUR shape selection: (CURSPO >> 1) & 7 gives 0-7 shape index.
+	# Body slides left→right across lane; legs stay pinned to lane corners.
+	@warning_ignore("integer_division")
+	var shape_idx: int = (curspo / 2) & 7
+
+	# Get left and right lane corner screen positions
+	var p1: Vector2  # Left corner (LINEX[CURSL1])
+	var p2: Vector2  # Right corner (LINEX[CURSL2])
 
 	if in_drop:
 		# CDROP: camera is tracking the player through the well. The cached
@@ -126,21 +137,12 @@ func _draw() -> void:
 		p1 = well.near_screen[cursl1]
 		p2 = well.near_screen[cursl2]
 
-	var pos: Vector2 = p1.lerp(p2, frac)
-
-	# Orientation: tangent along lane edge, normal pointing outward from center
-	var tangent: Vector2 = (p2 - p1).normalized()
-	var normal: Vector2 = Vector2(-tangent.y, tangent.x)
-	if normal.dot(well.screen_center - pos) < 0:
-		normal = -normal
-
-	# Scale based on lane segment length
-	var seg_len: float = p1.distance_to(p2)
-	var sz: float = maxf(seg_len, 10.0)
 	var color: Color = Colors.get_color(Colors.YELLOW)
 	var lw: float = 2.5
 
-	VS.draw_shape(self, "player", pos, tangent, normal, sz, color, lw)
+	# Render using ONELIN system — legs pin to lane corners automatically.
+	# See DSPCUR (ALDISP.MAC line 598) and ONELIN (line 1516).
+	VS.draw_onelin(self, VS.CURSOR[shape_idx], p1, p2, well.screen_center, color, lw)
 
 
 ## Draw SPLAT death explosion — expanding 16-spoke starburst with cycling colors.

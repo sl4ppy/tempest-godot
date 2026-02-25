@@ -29,6 +29,56 @@ static var FLIPPER: Array = [
 	[1, -1, true], [-2, -1, true],
 ]
 
+# Cursor: NCRS1S-NCRS8S — 8 positional variants for claw on rim (ALDISP.MAC).
+# Shape index = (CURSPO >> 1) & 7. Body slides left→right as index increases.
+# Legs stay pinned to lane corners while body interpolates — "crab strafing" effect.
+# See DSPCUR (line 598) and ONELIN (line 1516) in ALDISP.MAC.
+static var CURSOR: Array = [
+	# NCRS1S (index 0, body near left corner)
+	# Perp negated vs source: original perp convention is toward-center for positive,
+	# but draw_onelin perp positive = away from center. Body should be outside the well.
+	[
+		[0, 2, true], [2, 1, true], [3, -4, true], [-3, 3, true],
+		[-1, 0, true], [0, -2, true], [2, -1, true], [-3, 1, true],
+	],
+	# NCRS2S (index 1)
+	[
+		[1, 2, true], [7, -2, true], [-3, -1, true], [2, 1, true],
+		[-6, 1, true], [0, -1, true], [2, -1, true], [-3, 1, true],
+	],
+	# NCRS3S (index 2)
+	[
+		[2, 2, true], [6, -2, true], [-3, -1, true], [2, 1, true],
+		[-5, 1, true], [-1, -1, true], [2, -1, true], [-3, 1, true],
+	],
+	# NCRS4S (index 3, body centered)
+	[
+		[3, 2, true], [5, -2, true], [-3, -1, true], [2, 1, true],
+		[-4, 1, true], [-2, -1, true], [2, -1, true], [-3, 1, true],
+	],
+	# NCRS5S (index 4)
+	[
+		[5, 2, true], [3, -2, true], [-3, -1, true], [2, 1, true],
+		[-2, 1, true], [-4, -1, true], [2, -1, true], [-3, 1, true],
+	],
+	# NCRS6S (index 5)
+	[
+		[6, 2, true], [2, -2, true], [-3, -1, true], [2, 1, true],
+		[-1, 1, true], [-5, -1, true], [2, -1, true], [-3, 1, true],
+	],
+	# NCRS7S (index 6)
+	[
+		[7, 2, true], [1, -2, true], [-3, -1, true], [2, 1, true],
+		[0, 1, true], [-6, -1, true], [2, -1, true], [-3, 1, true],
+	],
+	# NCRS8S (index 7, body near right — 9 vectors, first is beam-off move)
+	[
+		[3, -1, false], [3, 4, true], [2, -1, true], [0, -2, true],
+		[-3, -1, true], [2, 1, true], [0, 2, true], [-1, 0, true],
+		[-3, -3, true],
+	],
+]
+
 # Pulsar: PULS0S-PULS4S — 5 animation frames driven by PULSON timer.
 # PULTAB: CPULS0, CPULS1, CPULS2, CPULS3, CPULS4, CPULS4
 static var PULSAR: Array = [

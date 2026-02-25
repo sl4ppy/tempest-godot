@@ -148,6 +148,7 @@ func _load_wave_visuals(wave: int) -> void:
 
 ## Full wave init — load shape, reset all entities, begin gameplay.
 func _start_wave(wave: int) -> void:
+	SoundManager.stop_all()
 	_set_gameplay_visible(true)
 	current_wave = wave
 	# Track highest wave reached for wave select unlock
@@ -355,6 +356,7 @@ var logo_total_timer: int = 0  # Overall CPAUSE timer for logo phase
 ## Begin attract mode high score display phase (CDLADR).
 func _begin_attract_hiscore() -> void:
 	attract_mode = true
+	SoundManager.set_attract_mute(true)
 	attract_timer = ATTRACT_HISCORE_TIME
 	_set_gameplay_visible(false)
 	hud.show_high_scores(high_scores, -1, "", qframe)
@@ -452,7 +454,8 @@ func _state_play() -> void:
 
 	# 3. FIREPC — fire if button pressed
 	if _fire_pressed:
-		projectiles.fire(player.cursl1, player.cursl2)
+		if projectiles.fire(player.cursl1, player.cursl2):
+			SoundManager.play_sound(SoundManager.SID_LA)
 		_fire_pressed = false
 
 	# 4. MOVCHA — advance all shots (player and enemy)
@@ -522,7 +525,8 @@ func _enemy_fire() -> void:
 			continue
 
 		# Fire!
-		enemy_shots.fire(inv.l1, inv.y)
+		if enemy_shots.fire(inv.l1, inv.y):
+			SoundManager.play_sound(SoundManager.SID_ES)
 		inv.fire_timer = LevelData.get_fire_delay(current_wave)
 
 		if enemy_shots.get_active_count() >= max_shots:
@@ -568,6 +572,7 @@ func _collide() -> void:
 func _player_die() -> void:
 	if state != State.CPLAY and state != State.CBOOM:
 		return
+	SoundManager.play_sound(SoundManager.SID_DI)
 	player.start_death(DEATH_FRAMES)
 	# Clear active shots
 	projectiles.clear_all()
@@ -641,6 +646,7 @@ func _state_endwave() -> void:
 	drop_y = player.cursy
 	drop_eye_start = well.eye.y  # Save camera start for tracking offset
 	player.in_drop = true  # Switch player to direct-projection rendering
+	SoundManager.play_sound(SoundManager.SID_T2)
 	state = State.CDROP
 
 
@@ -782,7 +788,8 @@ func _state_drop() -> void:
 
 	# FIREPC + MOVCHA — fire and advance player shots
 	if _fire_pressed:
-		projectiles.fire(player.cursl1, player.cursl2)
+		if projectiles.fire(player.cursl1, player.cursl2):
+			SoundManager.play_sound(SoundManager.SID_LA)
 		_fire_pressed = false
 	_zap_pressed = false  # Superzapper disabled during drop
 
@@ -833,6 +840,7 @@ func _begin_warp() -> void:
 	bonus_flash_timer = 0
 
 	warp_timer = 0
+	SoundManager.play_sound(SoundManager.SID_T3)
 	state = State.CNEWV2
 
 
@@ -867,6 +875,7 @@ var select_lefsid: int = 0  # Left edge of visible 5-column window (LEFSID)
 func _begin_wave_select() -> void:
 	_set_gameplay_visible(false)
 	attract_mode = false
+	SoundManager.set_attract_mute(false)
 	score = 0
 	lives = INITIAL_LIVES
 	next_bonus_idx = 0
@@ -919,7 +928,8 @@ func _state_wave_select() -> void:
 	if select_timer_ticks <= 0:
 		select_timer_ticks = SECOND
 		select_timer_seconds -= 1
-		# TODO: Play S3SWAR warning sound at 3 seconds
+		if select_timer_seconds == 3:
+			SoundManager.play_sound(SoundManager.SID_S3)
 		if select_timer_seconds < 0:
 			# Time's up — auto-select current position (simulate fire press)
 			_confirm_wave_select()
@@ -1106,6 +1116,7 @@ func _add_score(points: int) -> void:
 	if next_bonus_idx < BONUS_THRESHOLDS.size():
 		if old_score < BONUS_THRESHOLDS[next_bonus_idx] and score >= BONUS_THRESHOLDS[next_bonus_idx]:
 			lives += 1
+			SoundManager.play_sound(SoundManager.SID_WP)
 			bonus_flash_timer = SECOND  # Flash for 1 second
 			next_bonus_idx += 1
 	hud.update_display(score, lives, current_wave, qframe)

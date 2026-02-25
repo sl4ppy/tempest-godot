@@ -6,13 +6,9 @@ This is a **behavioral recreation** — we implement the original game logic dir
 
 ![Godot 4.6](https://img.shields.io/badge/Godot-4.6-blue) ![GDScript](https://img.shields.io/badge/language-GDScript-green) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
-## Screenshots
+## Demo
 
-| Title Screen (LOGPRO) | Attract Mode Gameplay | High Scores |
-|:---:|:---:|:---:|
-| ![TEMPEST title](images/logo.png) | ![Gameplay](images/gameplay.png) | ![High Scores](images/highscores.png) |
-
-*Left: LOGPRO title sequence — "TEMPEST" vector text with copyright notice, matching the original SCARNG routine from ALSCO2.MAC. Center: Attract mode demo gameplay on a key well with flippers, explosions, and the player ship. Right: High score table (LDRDSP) with 8 entries in blue vector font.*
+<video src="images/game_clip.mp4" width="600" controls autoplay loop muted></video>
 
 ## Features
 
@@ -28,8 +24,9 @@ This is a **behavioral recreation** — we implement the original game logic dir
 - **All 16 well shapes** with accurate 3D-to-2D perspective projection (WORSCR)
 - **CAM bytecode VM** — enemy AI runs as a bytecode interpreter executing the original 20 opcodes across 11 scripts, not reimplemented as imperative code
 - **Five enemy types**: Flipper, Pulsar, Tanker, Spiker, Fuseball — each with accurate movement, spawning, and attack behaviors
+- **Player cursor** — 8 ONELIN shape variants (NCRS1S-NCRS8S) with legs pinned to lane corners, body sliding across the lane for a "crab strafing" effect matching the original DSPCUR routine
 - **Two rendering systems** matching the original hardware:
-  - **ONELIN** (Flipper, Pulsar) — shapes drawn parametrically between lane edge endpoints
+  - **ONELIN** (Player, Flipper, Pulsar) — shapes drawn parametrically between lane edge endpoints
   - **SCAPIC** (Tanker, Spiker, Fuseball, shots) — centered vector shapes with perspective scaling
 - **Vector beam font** — all text rendered with line segments matching the original ANVGAN.MAC character generator
 - **Complete collision system** — lane-based Y-depth proximity (ENSIZE, CHACHA)
@@ -45,6 +42,13 @@ This is a **behavioral recreation** — we implement the original game logic dir
 - **99-wave difficulty progression** from original lookup tables
 - **CRT phosphor glow** shader — 13-tap bloom simulating vector monitor phosphors
 - **Mouse spinner input** — captured mouse for analog arcade spinner feel
+
+### Sound (Work in Progress)
+- **POKEY synthesis engine** — real-time audio via AudioStreamGenerator using the original 4-byte sequence data format from ALSOUN.MAC
+- **All 13 sound effects** loaded with verified hex data: cursor move, player fire, enemy explosion, player death, thrust (tube/space), enemy shot, pulsation on/off, bonus score, slam, 3-second warning, enemy line destroy
+- **Proper POKEY distortion modes** — 4-bit (period 15), 5-bit (period 31), and 17-bit (period 131071) polynomial counters with correct noise filtering per AUDC bits 7-5
+- **Sound triggers** wired to all gameplay events with attract mode muting and voice channel conflict matching the original hardware layout (8 voices across 2 POKEY chips)
+- **Known issue**: Audio does not yet sound authentic to the original arcade hardware. Achieving accurate POKEY sound reproduction is a top priority for continued development
 
 ## Running
 
@@ -71,11 +75,12 @@ scripts/
   cam_interpreter.gd     # CAM bytecode VM (20 opcodes, 11 scripts)
   vector_shapes.gd       # ONELIN + SCAPIC shape data and renderers
   vector_font.gd         # Vector beam font (ANVGAN.MAC character data)
+  sound_manager.gd       # POKEY synthesis engine (ALSOUN.MAC sequences)
   level_data.gd          # All 99 waves of difficulty tables + LEVEL_TABLE
   colors.gd              # 16-color palette autoload
   hud.gd                 # All UI screens: LDRDSP, GETDSP, RQRDSP, SCARNG
   entities/
-    player.gd            # Cursor movement, rim positioning, death animation
+    player.gd            # Cursor movement, ONELIN rendering, death animation
     invader_manager.gd   # 6-slot enemy pool, nymph spawning, explosions
     projectile.gd        # 8-slot player shot pool + spike collision
     enemy_shots.gd       # 4-slot enemy shot pool
@@ -114,7 +119,10 @@ The original reverse-engineered documentation is linked as a git submodule at `d
 - **Phase 1: Playfield + Player** — Complete
 - **Phase 2: Enemies + CAM System** — Complete
 - **Phase 3: Game Loop + Scoring** — Complete
-- **Phase 4: Sound + Polish** — Next
+- **Phase 4: Sound + Polish** — In Progress
+  - POKEY synthesis engine and all 13 sound triggers implemented
+  - Player cursor procedural animation (8 ONELIN shapes) implemented
+  - **Priority**: Sound does not yet match the original arcade — achieving authentic POKEY reproduction is the top focus
 - **Phase 5: Validation** — Planned
 
 ## License

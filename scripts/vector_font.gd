@@ -176,6 +176,20 @@ func _build_chars() -> void:
 	CHARS[")"] = [
 		[8, 0, false], [4, 8, true], [0, 8, true], [-4, 8, true], [16, -24, false],
 	]
+	# Ampersand — not in original ANVGAN.MAC, designed to match vector font style
+	CHARS["&"] = [
+		[16, 4, false],         # move to bottom-right start
+		[-12, 8, true],         # diagonal up-left to middle crossing
+		[0, 8, true],           # up left side
+		[4, 4, true],           # up-right curve to top
+		[4, 0, true],           # top horizontal
+		[0, -4, true],          # down from top
+		[-8, -8, true],         # diagonal cross back to center
+		[-4, -8, true],         # continue down-left
+		[4, -4, true],          # curve to bottom
+		[12, 4, true],          # sweep right and up
+		[8, -4, false],         # advance
+	]
 	# Copyright symbol © — circle with C inside, matching original VG shape
 	CHARS["©"] = [
 		# Octagonal circle (radius ~10, centered at 12,12)
