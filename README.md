@@ -8,7 +8,7 @@ This is a **behavioral recreation** — we implement the original game logic dir
 
 ## Demo
 
-<video src="images/game_clip.mp4" width="600" controls autoplay loop muted></video>
+![Tempest gameplay](images/game_clip_hq.gif)
 
 ## Features
 
