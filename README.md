@@ -8,23 +8,11 @@ This is a **behavioral recreation** — we implement the original game logic dir
 
 ## Screenshots
 
-| Title Screen (LOGPRO) | Gameplay Demo |
-|:---:|:---:|
-| ![TEMPEST rainbow logo](images/logo.png) | ![Gameplay](images/gameplay.png) |
+| Title Screen (LOGPRO) | Attract Mode Gameplay | High Scores |
+|:---:|:---:|:---:|
+| ![TEMPEST title](images/logo.png) | ![Gameplay](images/gameplay.png) | ![High Scores](images/highscores.png) |
 
-*Left: LOGPRO rainbow trail — "TEMPEST" text rendered at multiple depths with color cycling (white leading, rainbow trailing), matching the original SCARNG routine from ALSCO2.MAC. Right: Demo gameplay on a square well with enemies, explosions, and player ship.*
-
-| BOXPRO Rainbow | Attract Mode |
-|:---:|:---:|
-| ![BOXPRO shrinking box](images/boxpro.png) | ![Attract mode](images/attract.png) |
-
-*Left: BOXPRO phase — screen boundary rectangle (VORBOX) drawn as a rainbow trail at increasing depths. Right: Attract mode LOGPRO — "TEMPEST" text approaching the viewer with copyright notice.*
-
-| Gameplay 2 |
-|:---:|
-| ![Gameplay 2](images/gameplay2.png) |
-
-*Active gameplay with spikers, explosions, and the player firing.*
+*Left: LOGPRO title sequence — "TEMPEST" vector text with copyright notice, matching the original SCARNG routine from ALSCO2.MAC. Center: Attract mode demo gameplay on a key well with flippers, explosions, and the player ship. Right: High score table (LDRDSP) with 8 entries in blue vector font.*
 
 ## Features
 
